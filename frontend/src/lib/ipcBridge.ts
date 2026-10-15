@@ -16,6 +16,8 @@
 // failing as a rejected ApiResult — which surfaces as an unrelated symptom elsewhere on the page
 // (an empty dropdown, a list that never loads). Adding a backend feature means adding it here too;
 // backend/CLAUDE.md's "adding a feature" checklist says so.
+import { isWriteChannel, announceDataChanged } from './dataChanged';
+
 const FEATURES = [
   'auth', 'accountClasses', 'addas', 'alerts', 'backup', 'bankAccounts', 'businessAccounts', 'categories', 'chartAccounts', 'cheques',
   'cities', 'customers', 'draftExpenses', 'draftPurchases', 'draftPurchaseReturns', 'draftReceipts',
@@ -50,7 +52,15 @@ export function installApiBridge(): void {
     api[feature] = new Proxy(
       {},
       {
-        get: (_target, action) => (payload?: unknown) => invoke(`${channelPrefix}:${String(action)}`, payload)
+        get: (_target, action) => (payload?: unknown) => {
+          const channel = `${channelPrefix}:${String(action)}`;
+          const result = invoke(channel, payload);
+          // A successful write tells the other windows to refresh (lib/dataChanged.ts).
+          if (isWriteChannel(channel)) {
+            result.then(r => { if ((r as { ok?: boolean } | null)?.ok) announceDataChanged(); }, () => {});
+          }
+          return result;
+        }
       }
     );
   }

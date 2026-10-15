@@ -10,8 +10,11 @@ import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { SaleBillPrintable, type SaleBillPrintModel } from '@/components/reports/SaleBillPrintable';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function BiltyUpdatePage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   // Search Filters State
   const [startDate, setStartDate] = useState(() => getWindowParam('startDate') || '');
   const [endDate, setEndDate] = useState(() => getWindowParam('endDate') || '');
@@ -52,8 +55,8 @@ export default function BiltyUpdatePage() {
   const [loading, setLoading] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
-  useEffect(() => { api.listAddas().then(r => { if (r.ok) setAddas(r.data); }); }, []);
-  useEffect(() => { api.listStores().then(r => { if (r.ok) setStores(r.data); }); }, []);
+  useEffect(() => { api.listAddas().then(r => { if (r.ok) setAddas(r.data); }); }, [dataVersion]);
+  useEffect(() => { api.listStores().then(r => { if (r.ok) setStores(r.data); }); }, [dataVersion]);
 
   // BA-01 (changes-14-09-26.md, 2026-09-15): print a bill straight from its row here, without
   // navigating to the Sale Bill page first. Reuses the exact same <SaleBillPrintable> template
@@ -114,7 +117,7 @@ export default function BiltyUpdatePage() {
     setHasLoadedOnce(true);
   }, [startDate, endDate]);
 
-  useEffect(() => { loadInvoices(); }, [loadInvoices]);
+  useEffect(() => { loadInvoices(); }, [loadInvoices, dataVersion]);
 
   // "Show Print Preview" opens a new window on this same filtered directory (per the user,
   // 2026-09-03), instead of an in-page overlay.

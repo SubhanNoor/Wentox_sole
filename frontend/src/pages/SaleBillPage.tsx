@@ -31,6 +31,7 @@ import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
 import { getWindowParam } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface UiItem {
   uid: string;
@@ -71,6 +72,8 @@ function recalcItem(item: UiItem): UiItem {
 }
 
 export default function SaleBillPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
   // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
@@ -125,7 +128,7 @@ export default function SaleBillPage() {
       if (baRes.ok) setBusinessAccounts(baRes.data);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-  }, []);
+  }, [dataVersion]);
 
   const refreshStock = useCallback(async () => {
     const res = await api.reports.stock();
@@ -339,7 +342,7 @@ export default function SaleBillPage() {
     const res = await api.draftSaleBills.listDeletedNumbers();
     if (res.ok) setDeletedNumbers(res.data);
   }, []);
-  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers, dataVersion]);
 
 
   // SB-06: post the whole run. Each draft confirms in its own transaction on the backend, so one
@@ -795,7 +798,13 @@ const nextSystemBillNo = useMemo(
     return res.ok ? res.data : null;
   }, []);
 
-  useEffect(() => { refreshPosted(); }, [refreshPosted]);
+  // When another window saves (dataVersion > 0), the Unposted list refreshes here too — only the
+  // list, not the open-on-load effect above, which can reset the screen to a new bill.
+  useEffect(() => {
+    refreshPosted();
+    // Deferred a tick so the list's setState lands in a callback, not the effect body.
+    if (dataVersion > 0) Promise.resolve().then(refreshUnposted);
+  }, [refreshPosted, refreshUnposted, dataVersion]);
 
   // Sorted by system_no (creation order), NOT the shared list()'s own ORDER BY (bill_date DESC,
   // bill_id DESC — right for the date-driven report views that also call it, but wrong here): a

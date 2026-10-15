@@ -976,3 +976,9 @@ select option:hover {
     width: 100% !important;
   }
 }
+
+/* Report documents shown on screen: an account row opens that account's ledger (per the user,
+   2026-10-14). Screen only — the print preview's copy of the document is drawn without this class. */
+.report-row-link { cursor: pointer; }
+.report-row-link:hover td { background-color: #fffbeb !important; }
+.report-row-link:focus-visible { outline: 2px solid #B08D57; outline-offset: -2px; }

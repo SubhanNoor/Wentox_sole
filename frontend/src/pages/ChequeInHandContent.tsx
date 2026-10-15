@@ -4,6 +4,7 @@ import { formatDate } from '@/lib/utils';
 import { Search, Wallet } from 'lucide-react';
 import * as api from '@/lib/api';
 import type { ChequeRow } from '@/lib/api';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface InHandRow extends ChequeRow {
   unallocated: number;
@@ -16,6 +17,8 @@ interface InHandRow extends ChequeRow {
 // OUT to that screen: landing here with a cheque in front of you and no route to acting on it was
 // the complaint that started this, and the answer is a signpost rather than duplicated actions.
 export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () => void }) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [rows, setRows] = useState<InHandRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -58,7 +61,7 @@ export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () =>
     }
   }, []);
 
-  useEffect(() => { loadInHand(); }, [loadInHand]);
+  useEffect(() => { loadInHand(); }, [loadInHand, dataVersion]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();

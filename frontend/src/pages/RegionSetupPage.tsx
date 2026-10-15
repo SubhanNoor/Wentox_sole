@@ -6,8 +6,11 @@ import DataListTable from '@/components/DataListTable';
 import { regions as regionsApi, type RegionRow } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function RegionSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [regions, setRegions] = useState<RegionRow[]>([]);
   const [regionSearch, setRegionSearch] = useState('');
 
@@ -32,7 +35,7 @@ export default function RegionSetupPage() {
     if (res.ok) setRegions(res.data);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, dataVersion]);
 
   const handleOpenAddModal = () => {
     setSelectedRegionId(null);

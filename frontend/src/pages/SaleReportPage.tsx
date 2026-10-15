@@ -1,8 +1,9 @@
-import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { ChevronDown, ChevronRight, Eye } from 'lucide-react';
+import { Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import { groupByRegion, groupByCity, groupByRegionThenCity } from '@/lib/geoGrouping';
@@ -10,7 +11,11 @@ import * as api from '@/lib/api';
 import type { SaleReportRow as ApiSaleReportRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { closePreviewWindow } from '@/components/reports/previewWindow';
+import LiveReportDocument from '@/components/reports/LiveReportDocument';
+import { REPORT_COLORS, signedColor } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface SaleReportRow {
   key: string;
@@ -25,6 +30,8 @@ interface SaleReportRow {
   saleReturn: number;
   netSales: number;
   payment: number;
+  /** Account balance on the To date (customer's ledger closing figure); a group's is its customers' sum. */
+  balance: number;
   /** Optional because the synthesized group/overall rows have no party of their own to attribute a
    *  JV to — only real customer rows carry it. */
   totalJv?: number;
@@ -60,6 +67,8 @@ interface Metrics {
   saleReturn: number;
   netSales: number;
   payment: number;
+  /** Account balance on the To date (customer's ledger closing figure); a group's is its customers' sum. */
+  balance: number;
 }
 
 function sumMetrics(rows: Metrics[]): Metrics {
@@ -70,7 +79,8 @@ function sumMetrics(rows: Metrics[]): Metrics {
     saleReturn: acc.saleReturn + r.saleReturn,
     netSales: acc.netSales + r.netSales,
     payment: acc.payment + r.payment,
-  }), { totalSales: 0, totalCartons: 0, commission: 0, saleReturn: 0, netSales: 0, payment: 0 });
+    balance: acc.balance + r.balance,
+  }), { totalSales: 0, totalCartons: 0, commission: 0, saleReturn: 0, netSales: 0, payment: 0, balance: 0 });
 }
 
 function mapRow(r: ApiSaleReportRow): SaleReportRow {
@@ -87,27 +97,27 @@ function mapRow(r: ApiSaleReportRow): SaleReportRow {
     saleReturn: r.sale_return,
     netSales: r.net_sales,
     payment: r.payment,
+    balance: r.balance,
     totalJv: r.total_jv,
   };
 }
 
 export function SaleReportContent() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [groupMode, setGroupMode] = useState<GroupMode>(() => (getWindowParam('groupMode') as GroupMode) || 'overall');
   const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>(() => (getWindowParam('viewMode') as 'overall' | 'month' | 'range') || 'overall');
   const [filterMonth, setFilterMonth] = useState(() => { const p = getWindowParam('filterMonth'); return p != null ? Number(p) : new Date().getMonth(); });
   const [filterYear, setFilterYear] = useState(() => { const p = getWindowParam('filterYear'); return p != null ? Number(p) : new Date().getFullYear(); });
   const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
-  const [expandedRegionId, setExpandedRegionId] = useState<number | null>(null);
-  const [expandedCityId, setExpandedCityId] = useState<number | null>(null);
 
-  const changeGroupMode = (mode: GroupMode) => {
-    setGroupMode(mode);
-    setExpandedRegionId(null);
-    setExpandedCityId(null);
-  };
-
-  const [customerRows, setCustomerRows] = useState<SaleReportRow[]>([]);
+  const [allCustomerRows, setCustomerRows] = useState<SaleReportRow[]>([]);
+  const [skipZero, setSkipZero] = useState(() => getWindowParam('skipZero') === '1');
+  const customerRows = useMemo(
+    () => (skipZero ? allCustomerRows.filter(r => !isZeroBalance(r.balance)) : allCustomerRows),
+    [allCustomerRows, skipZero],
+  );
   const [loading, setLoading] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
@@ -131,19 +141,21 @@ export function SaleReportContent() {
   const loadRows = useCallback(async () => {
     setLoading(true);
     const res = await api.reports.saleReport({ date_from: periodStart, date_to: periodEnd });
-    if (res.ok) setCustomerRows((res.data as ApiSaleReportRow[]).map(mapRow).filter(r => r.totalSales > 0 || r.saleReturn > 0 || r.payment > 0));
+    if (res.ok) setCustomerRows((res.data as ApiSaleReportRow[]).map(mapRow)
+      // Idle customers still carrying a balance stay listed (per the user, 2026-10-14).
+      .filter(r => r.totalSales > 0 || r.saleReturn > 0 || r.payment > 0 || !isZeroBalance(r.balance)));
     setLoading(false);
     setHasLoadedOnce(true);
   }, [periodStart, periodEnd]);
 
-  useEffect(() => { loadRows(); }, [loadRows]);
+  useEffect(() => { loadRows(); }, [loadRows, dataVersion]);
 
   // "Show Print Preview" opens a new window on this same filtered/grouped report (per the user,
   // 2026-09-03), instead of an in-page overlay.
   const handleShowPrintPreview = () => {
     api.openWindow('reports', 'sale-report', {
       groupMode, viewMode, filterMonth: String(filterMonth), filterYear: String(filterYear),
-      fromDate, toDate, autoPreview: '1',
+      fromDate, toDate, skipZero: skipZero ? '1' : '0', autoPreview: '1',
     });
   };
 
@@ -175,28 +187,28 @@ export function SaleReportContent() {
   );
 
   const handleExportExcel = () => {
-    const headers = [COLUMN_LABELS[groupMode], 'Total Sales', 'Total Cartons', 'Commission', 'Sale Return', 'Net Sales', 'Payment'];
+    const headers = [COLUMN_LABELS[groupMode], 'Total Sales', 'Total Cartons', 'Commission', 'Sale Return', 'Net Sales', 'Payment', 'Balance'];
     let rows: (string | number)[][];
     if (groupMode === 'overall') {
-      rows = [[overallRow.label, overallRow.totalSales, formatCartons(overallRow.totalCartons), overallRow.commission, overallRow.saleReturn, overallRow.netSales, overallRow.payment]];
+      rows = [[overallRow.label, overallRow.totalSales, formatCartons(overallRow.totalCartons), overallRow.commission, overallRow.saleReturn, overallRow.netSales, overallRow.payment, overallRow.balance]];
     } else if (groupMode === 'customer') {
-      rows = customerRows.map(r => [r.label, r.totalSales, formatCartons(r.totalCartons), r.commission, r.saleReturn, r.netSales, r.payment]);
+      rows = customerRows.map(r => [r.label, r.totalSales, formatCartons(r.totalCartons), r.commission, r.saleReturn, r.netSales, r.payment, r.balance]);
     } else if (groupMode === 'region') {
       rows = regionGroups.flatMap(g => [
-        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment],
-        ...g.rows.map(c => [`  ${c.label}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment])
+        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment, g.balance],
+        ...g.rows.map(c => [`  ${c.label}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment, c.balance])
       ]);
     } else if (groupMode === 'city') {
       rows = cityGroups.flatMap(g => [
-        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment],
-        ...g.rows.map(c => [`  ${c.label}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment])
+        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment, g.balance],
+        ...g.rows.map(c => [`  ${c.label}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment, c.balance])
       ]);
     } else {
       rows = regionCityGroups.flatMap(g => [
-        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment],
+        [g.name, g.totalSales, formatCartons(g.totalCartons), g.commission, g.saleReturn, g.netSales, g.payment, g.balance],
         ...g.cities.flatMap(c => [
-          [`  ${c.name}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment],
-          ...c.rows.map(cust => [`    ${cust.label}`, cust.totalSales, formatCartons(cust.totalCartons), cust.commission, cust.saleReturn, cust.netSales, cust.payment])
+          [`  ${c.name}`, c.totalSales, formatCartons(c.totalCartons), c.commission, c.saleReturn, c.netSales, c.payment, c.balance],
+          ...c.rows.map(cust => [`    ${cust.label}`, cust.totalSales, formatCartons(cust.totalCartons), cust.commission, cust.saleReturn, cust.netSales, cust.payment, cust.balance])
         ])
       ]);
     }
@@ -214,19 +226,19 @@ export function SaleReportContent() {
       displayRows = customerRows;
     } else if (groupMode === 'region') {
       displayRows = regionGroups.flatMap(g => [
-        { key: `region-${g.id}`, label: g.name, regionId: g.id, regionName: g.name, cityId: null, cityName: null, totalSales: g.totalSales, totalCartons: g.totalCartons, commission: g.commission, saleReturn: g.saleReturn, netSales: g.netSales, payment: g.payment, bold: true },
+        { key: `region-${g.id}`, label: g.name, regionId: g.id, regionName: g.name, cityId: null, cityName: null, totalSales: g.totalSales, totalCartons: g.totalCartons, commission: g.commission, saleReturn: g.saleReturn, netSales: g.netSales, payment: g.payment, balance: g.balance, bold: true },
         ...g.rows.map(c => ({ ...c, key: `customer-${c.key}`, indent: 1 })),
       ]);
     } else if (groupMode === 'city') {
       displayRows = cityGroups.flatMap(g => [
-        { key: `city-${g.id}`, label: g.name, regionId: null, regionName: null, cityId: g.id, cityName: g.name, totalSales: g.totalSales, totalCartons: g.totalCartons, commission: g.commission, saleReturn: g.saleReturn, netSales: g.netSales, payment: g.payment, bold: true },
+        { key: `city-${g.id}`, label: g.name, regionId: null, regionName: null, cityId: g.id, cityName: g.name, totalSales: g.totalSales, totalCartons: g.totalCartons, commission: g.commission, saleReturn: g.saleReturn, netSales: g.netSales, payment: g.payment, balance: g.balance, bold: true },
         ...g.rows.map(c => ({ ...c, key: `customer-${c.key}`, indent: 1 })),
       ]);
     } else {
       displayRows = regionCityGroups.flatMap(g => [
-        { key: `region-${g.id}`, label: g.name, regionId: g.id, regionName: g.name, cityId: null, cityName: null, totalSales: g.totalSales, totalCartons: g.totalCartons, commission: g.commission, saleReturn: g.saleReturn, netSales: g.netSales, payment: g.payment, bold: true },
+        { key: `region-${g.id}`, label: g.name, regionId: g.id, regionName: g.name, cityId: null, cityName: null, totalSales: g.totalSales, totalCartons: g.totalCartons, commission: g.commission, saleReturn: g.saleReturn, netSales: g.netSales, payment: g.payment, balance: g.balance, bold: true },
         ...g.cities.flatMap(c => [
-          { key: `city-${g.id}-${c.id}`, label: c.name, regionId: null, regionName: null, cityId: c.id, cityName: c.name, totalSales: c.totalSales, totalCartons: c.totalCartons, commission: c.commission, saleReturn: c.saleReturn, netSales: c.netSales, payment: c.payment, bold: true, indent: 1 },
+          { key: `city-${g.id}-${c.id}`, label: c.name, regionId: null, regionName: null, cityId: c.id, cityName: c.name, totalSales: c.totalSales, totalCartons: c.totalCartons, commission: c.commission, saleReturn: c.saleReturn, netSales: c.netSales, payment: c.payment, balance: c.balance, bold: true, indent: 1 },
           ...c.rows.map(cust => ({ ...cust, key: `customer-${cust.key}`, indent: 2 })),
         ]),
       ]);
@@ -263,28 +275,31 @@ export function SaleReportContent() {
               <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Sale Return</th>
               <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Net Sales</th>
               <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Payment</th>
+              <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance</th>
             </tr>
           </thead>
           <tbody>
             {displayRows.map(r => (
               <tr key={r.key} style={{ fontWeight: r.bold ? 'bold' : 'normal', backgroundColor: r.bold ? '#f9f9f9' : '#ffffff' }}>
                 <td style={{ border: '1px solid #000000', padding: r.indent ? `4px 6px 4px ${6 + r.indent * 14}px` : '5px 6px', fontSize: r.indent ? '10.5px' : '11px' }}>{r.label}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.totalSales)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCartons(r.totalCartons)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.commission)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.saleReturn)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(r.netSales)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.payment)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.text }}>{formatCurrency(r.totalSales)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.text }}>{formatCartons(r.totalCartons)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.commission }}>{formatCurrency(r.commission)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(r.saleReturn)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: REPORT_COLORS.gold }}>{formatCurrency(r.netSales)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(r.payment)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: signedColor(r.balance) }}>{formatCurrency(r.balance)}</td>
               </tr>
             ))}
             <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.totalSales)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCartons(totals.totalCartons)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.commission)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.saleReturn)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(totals.netSales)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.payment)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.text }}>{formatCurrency(totals.totalSales)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.text }}>{formatCartons(totals.totalCartons)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.commission }}>{formatCurrency(totals.commission)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(totals.saleReturn)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{formatCurrency(totals.netSales)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(totals.payment)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{formatCurrency(totals.balance)}</td>
             </tr>
           </tbody>
         </table>
@@ -320,7 +335,7 @@ export function SaleReportContent() {
           {(Object.keys(GROUP_LABELS) as GroupMode[]).map(mode => (
             <button
               key={mode}
-              onClick={() => changeGroupMode(mode)}
+              onClick={() => setGroupMode(mode)}
               className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 cursor-pointer ${groupMode === mode ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               {GROUP_LABELS[mode]}
@@ -393,6 +408,7 @@ export function SaleReportContent() {
           </div>
 
           <div className="flex items-center gap-2">
+            <SkipZeroToggle value={skipZero} onChange={setSkipZero} />
             <button
               onClick={handleShowPrintPreview}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
@@ -402,187 +418,15 @@ export function SaleReportContent() {
           </div>
         </div>
 
-        {/* Report Sheet */}
-        <div className="card-white p-6 md:p-8 bg-white border">
-          <div className="flex items-center justify-between border-b pb-4 mb-6">
-            <div>
-              <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
-              <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Footwear Distribution</p>
-            </div>
-            <div className="text-right">
-              <h2 className="font-lora font-semibold text-lg uppercase">Sale Report</h2>
-              <p className="text-sm text-slate-700 mt-1 font-semibold uppercase">{periodLabel}</p>
-            </div>
-          </div>
+        {/* The report itself: the same document the print preview prints (Product Ledger layout,
+            per the user 2026-10-14). Region/City groups are listed fully expanded, as on paper. */}
+        <LiveReportDocument loading={loading && !hasLoadedOnce} empty={customerRows.length === 0} emptyMessage="No sales activity found for this period.">
+          {renderPrintableDocument()}
+        </LiveReportDocument>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4">{COLUMN_LABELS[groupMode]}</th>
-                  <th className="p-3 text-right">Total Sales</th>
-                  <th className="p-3 text-right">Total Cartons</th>
-                  <th className="p-3 text-right">Commission</th>
-                  <th className="p-3 text-right">Sale Return</th>
-                  <th className="p-3 text-right">Net Sales</th>
-                  <th className="p-3 text-right">Payment</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={7} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                ) : groupMode === 'overall' ? (
-                  <tr className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 font-semibold text-slate-800">{overallRow.label}</td>
-                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(overallRow.totalSales)}</td>
-                    <td className="p-3 text-right font-bold text-slate-700">{formatCartons(overallRow.totalCartons)}</td>
-                    <td className="p-3 text-right font-bold text-amber-700">{overallRow.commission > 0 ? formatCurrency(overallRow.commission) : '-'}</td>
-                    <td className="p-3 text-right font-bold text-blue-700">{overallRow.saleReturn > 0 ? formatCurrency(overallRow.saleReturn) : '-'}</td>
-                    <td className="p-3 text-right font-bold" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(overallRow.netSales)}</td>
-                    <td className="p-3 text-right font-bold text-emerald-700">{formatCurrency(overallRow.payment)}</td>
-                  </tr>
-                ) : groupMode === 'customer' ? (
-                  customerRows.length === 0 ? (
-                    <tr><td colSpan={7} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
-                  ) : (
-                    customerRows.flatMap(row => [
-                      <tr key={row.key} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-semibold text-slate-800">{row.label}</td>
-                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.totalSales)}</td>
-                        <td className="p-3 text-right font-bold text-slate-700">{formatCartons(row.totalCartons)}</td>
-                        <td className="p-3 text-right font-bold text-amber-700">{row.commission > 0 ? formatCurrency(row.commission) : '-'}</td>
-                        <td className="p-3 text-right font-bold text-blue-700">{row.saleReturn > 0 ? formatCurrency(row.saleReturn) : '-'}</td>
-                        <td className="p-3 text-right font-bold" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(row.netSales)}</td>
-                        <td className="p-3 text-right font-bold text-emerald-700">{formatCurrency(row.payment)}</td>
-                      </tr>,
-                      // Own row, not a column: a JV reduces what is owed but is not money
-                      // collected, and most customers have none — a column would be mostly dashes.
-                      (row.totalJv ?? 0) !== 0 ? (
-                        <tr key={`jv-${row.key}`} className="border-b bg-amber-50/40" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-2 pl-8 text-xs font-semibold text-amber-900" colSpan={6}>
-                            Journal Voucher applied
-                          </td>
-                          <td className="p-2 text-right text-xs font-bold font-mono text-amber-900">
-                            {formatCurrency(Math.abs(row.totalJv ?? 0))}
-                          </td>
-                        </tr>
-                      ) : null,
-                    ])
-                  )
-                ) : groupMode === 'region' || groupMode === 'city' ? (
-                  (groupMode === 'region' ? regionGroups : cityGroups).length === 0 ? (
-                    <tr><td colSpan={7} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
-                  ) : (
-                    (groupMode === 'region' ? regionGroups : cityGroups).map(g => {
-                      const expandedId = groupMode === 'region' ? expandedRegionId : expandedCityId;
-                      const setExpandedId = groupMode === 'region' ? setExpandedRegionId : setExpandedCityId;
-                      const isExpanded = expandedId === g.id;
-                      return (
-                        <Fragment key={String(g.id)}>
-                          <tr
-                            className="border-b bg-slate-50/60 hover:bg-slate-100/60 cursor-pointer font-semibold"
-                            style={{ borderColor: 'var(--border-table)' }}
-                            onClick={() => setExpandedId(isExpanded ? null : g.id)}
-                          >
-                            <td className="p-3 pl-4 text-slate-800 flex items-center gap-1.5">
-                              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              {g.name}
-                              <span className="text-xs font-normal text-slate-400">({g.rows.length} customers)</span>
-                            </td>
-                            <td className="p-3 text-right text-slate-800">{formatCurrency(g.totalSales)}</td>
-                            <td className="p-3 text-right text-slate-700">{formatCartons(g.totalCartons)}</td>
-                            <td className="p-3 text-right text-amber-700">{g.commission > 0 ? formatCurrency(g.commission) : '-'}</td>
-                            <td className="p-3 text-right text-blue-700">{g.saleReturn > 0 ? formatCurrency(g.saleReturn) : '-'}</td>
-                            <td className="p-3 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(g.netSales)}</td>
-                            <td className="p-3 text-right text-emerald-700">{formatCurrency(g.payment)}</td>
-                          </tr>
-                          {isExpanded && g.rows.map(c => (
-                            <tr key={c.key} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                              <td className="p-3 pl-10 text-slate-600">{c.label}</td>
-                              <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.totalSales)}</td>
-                              <td className="p-3 text-right font-medium text-slate-600">{formatCartons(c.totalCartons)}</td>
-                              <td className="p-3 text-right font-medium text-amber-600">{c.commission > 0 ? formatCurrency(c.commission) : '-'}</td>
-                              <td className="p-3 text-right font-medium text-blue-600">{c.saleReturn > 0 ? formatCurrency(c.saleReturn) : '-'}</td>
-                              <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.netSales)}</td>
-                              <td className="p-3 text-right font-medium text-emerald-600">{formatCurrency(c.payment)}</td>
-                            </tr>
-                          ))}
-                        </Fragment>
-                      );
-                    })
-                  )
-                ) : (
-                  regionCityGroups.length === 0 ? (
-                    <tr><td colSpan={7} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
-                  ) : (
-                    regionCityGroups.map(region => {
-                      const isRegionExpanded = expandedRegionId === region.id;
-                      return (
-                        <Fragment key={String(region.id)}>
-                          <tr
-                            className="border-b bg-slate-100/70 hover:bg-slate-200/60 cursor-pointer font-bold"
-                            style={{ borderColor: 'var(--border-table)' }}
-                            onClick={() => setExpandedRegionId(isRegionExpanded ? null : region.id)}
-                          >
-                            <td className="p-3 pl-4 text-slate-800 flex items-center gap-1.5">
-                              {isRegionExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              {region.name}
-                              <span className="text-xs font-normal text-slate-400">({region.cities.length} cities, {region.rows.length} customers)</span>
-                            </td>
-                            <td className="p-3 text-right text-slate-800">{formatCurrency(region.totalSales)}</td>
-                            <td className="p-3 text-right text-slate-700">{formatCartons(region.totalCartons)}</td>
-                            <td className="p-3 text-right text-amber-700">{region.commission > 0 ? formatCurrency(region.commission) : '-'}</td>
-                            <td className="p-3 text-right text-blue-700">{region.saleReturn > 0 ? formatCurrency(region.saleReturn) : '-'}</td>
-                            <td className="p-3 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(region.netSales)}</td>
-                            <td className="p-3 text-right text-emerald-700">{formatCurrency(region.payment)}</td>
-                          </tr>
-                          {isRegionExpanded && region.cities.map(city => {
-                            const isCityExpanded = expandedCityId === city.id;
-                            return (
-                              <Fragment key={`${region.id}-${city.id}`}>
-                                <tr
-                                  className="border-b bg-slate-50/60 hover:bg-slate-100/60 cursor-pointer font-semibold"
-                                  style={{ borderColor: 'var(--border-table)' }}
-                                  onClick={() => setExpandedCityId(isCityExpanded ? null : city.id)}
-                                >
-                                  <td className="p-3 pl-10 text-slate-700 flex items-center gap-1.5">
-                                    {isCityExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                                    {city.name}
-                                    <span className="text-xs font-normal text-slate-400">({city.rows.length} customers)</span>
-                                  </td>
-                                  <td className="p-3 text-right text-slate-800">{formatCurrency(city.totalSales)}</td>
-                                  <td className="p-3 text-right text-slate-700">{formatCartons(city.totalCartons)}</td>
-                                  <td className="p-3 text-right text-amber-700">{city.commission > 0 ? formatCurrency(city.commission) : '-'}</td>
-                                  <td className="p-3 text-right text-blue-700">{city.saleReturn > 0 ? formatCurrency(city.saleReturn) : '-'}</td>
-                                  <td className="p-3 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(city.netSales)}</td>
-                                  <td className="p-3 text-right text-emerald-700">{formatCurrency(city.payment)}</td>
-                                </tr>
-                                {isCityExpanded && city.rows.map(c => (
-                                  <tr key={c.key} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                                    <td className="p-3 pl-16 text-slate-600">{c.label}</td>
-                                    <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.totalSales)}</td>
-                                    <td className="p-3 text-right font-medium text-slate-600">{formatCartons(c.totalCartons)}</td>
-                                    <td className="p-3 text-right font-medium text-amber-600">{c.commission > 0 ? formatCurrency(c.commission) : '-'}</td>
-                                    <td className="p-3 text-right font-medium text-blue-600">{c.saleReturn > 0 ? formatCurrency(c.saleReturn) : '-'}</td>
-                                    <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.netSales)}</td>
-                                    <td className="p-3 text-right font-medium text-emerald-600">{formatCurrency(c.payment)}</td>
-                                  </tr>
-                                ))}
-                              </Fragment>
-                            );
-                          })}
-                        </Fragment>
-                      );
-                    })
-                  )
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
       <ReportPrintPreviewModal
         isOpen={isPreviewOpen}
-        onClose={() => setIsPreviewOpen(false)}
+        onClose={() => { setIsPreviewOpen(false); closePreviewWindow(); }}
         title="Sale Report - Print Preview"
         orientation="portrait"
         onExportExcel={handleExportExcel}

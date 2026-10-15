@@ -10,8 +10,11 @@ import type { VendorRow, RegionRow, CityRow, ProductRow, PurchaseRow } from '@/l
 import { formatDate, getTodayDate } from '@/lib/utils';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function VendorSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [vendorSearch, setVendorSearch] = useState('');
   const [selectedCityFilter, setSelectedCityFilter] = useState('all');
 
@@ -62,7 +65,7 @@ export default function VendorSetupPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, dataVersion]);
 
   const citiesInRegion = useMemo(
     () => vendorRegionId ? cities.filter(c => c.region_id === Number(vendorRegionId)) : cities,

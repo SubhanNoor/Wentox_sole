@@ -17,6 +17,7 @@ import type { ArticleFormValues } from '@/components/ProductArticleForm';
 import * as api from '@/lib/api';
 import type { ProductRow, CategoryRow, VendorRow, ProductVariantRow, ProductBatchFieldError } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 // Two tabs (per the user, 2026-08-30 follow-up):
 //   - Register Product — the bound-record toolbar screen (New/Delete/Edit/Done, First/Prev/Next/
@@ -55,6 +56,8 @@ function costsToApiPayload(costs: ProductCosts) {
 }
 
 export default function ProductSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [productSearch, setProductSearch] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -84,7 +87,7 @@ export default function ProductSetupPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, dataVersion]);
 
   const [pageTab, setPageTab] = useState<'register' | 'directory'>('register');
 

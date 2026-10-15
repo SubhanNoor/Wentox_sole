@@ -21,9 +21,9 @@ module.exports = function register() {
     return service.productLedger(payload);
   }));
 
-  ipcMain.handle('reports:vendor-stock', wrap(() => {
+  ipcMain.handle('reports:vendor-stock', wrap((payload) => {
     requireSession();
-    return service.vendorStock();
+    return service.vendorStock(payload);
   }));
 
   ipcMain.handle('reports:sale-analysis', wrap((payload) => {

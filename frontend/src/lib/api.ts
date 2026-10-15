@@ -1648,6 +1648,24 @@ export interface StockMovementRow {
 export interface ProductLedgerRow extends StockMovementRow {
   debit: number;
   credit: number;
+  // Stock of this product+colour right after this movement (starting from its Opening).
+  running_balance: number;
+}
+
+// One line per product+colour (client request, 2026-10-12): Opening = stock before date_from,
+// Balance = Opening + In - Out = stock on date_to.
+export interface ProductLedgerProduct {
+  variant_id: number;
+  article_id: number;
+  article_code: string;
+  article_name: string;
+  color: string;
+  category_name: string;
+  vendor_name: string | null;
+  opening: number;
+  in: number;
+  out: number;
+  balance: number;
 }
 
 export interface ProductLedgerResult {
@@ -1655,11 +1673,14 @@ export interface ProductLedgerResult {
   total_in: number;
   total_out: number;
   net: number;
+  products: ProductLedgerProduct[];
+  product_totals: { opening: number; in: number; out: number; balance: number };
 }
 
 export interface StockFilters {
   article_id?: number;
   category_id?: number;
+  as_of_date?: string;
 }
 
 export interface ProductionFilters extends DateRangeFilters {
@@ -1759,6 +1780,8 @@ export interface SaleAnalysisRow {
   total_commission: number;
   /** Rendered as its own row under the party, never a column — a JV is not a payment. */
   total_jv: number;
+  // Account balance on the To date — same figure the party's own ledger closes on (debit-positive).
+  balance: number;
 }
 
 export interface SaleAnalysisRegionGroup {
@@ -1782,6 +1805,8 @@ export interface SaleReportRow {
   payment: number;
   /** Own row under the party, not a column, and deliberately outside net_sales. */
   total_jv: number;
+  // Account balance on the To date — same figure the party's own ledger closes on (debit-positive).
+  balance: number;
 }
 
 export interface SaleReportRegionGroup {
@@ -1803,6 +1828,8 @@ export interface VendorReportRow {
   payment_paid: number;
   /** Own row under the vendor, not a column. */
   total_jv: number;
+  // Account balance on the To date — same figure the party's own ledger closes on (debit-positive).
+  balance: number;
 }
 
 export interface VendorReportFilters extends DateRangeFilters {
@@ -1922,6 +1949,8 @@ export interface AccountBalanceResult {
 export interface CashBookFilters {
   date?: string;
   month?: string;
+  date_from?: string;
+  date_to?: string;
 }
 
 export interface OverallTrailRow {
@@ -1979,6 +2008,8 @@ declare global {
       windows: {
         open: (payload: { page: string; tab?: string; params?: Record<string, string> }) => Promise<ApiResult<{ ok: true }>>;
         closeSelf: () => Promise<ApiResult<{ closed: boolean }>>;
+        list: () => Promise<ApiResult<OpenWindowRow[]>>;
+        focus: (payload: { id: number }) => Promise<ApiResult<{ focused: boolean }>>;
       };
       systemReset: {
         run: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
@@ -2400,7 +2431,7 @@ declare global {
         stock: (payload?: StockFilters) => Promise<ApiResult<StockRow[]>>;
         production: (payload?: ProductionFilters) => Promise<ApiResult<StockMovementRow[]>>;
         'product-ledger': (payload?: ProductLedgerFilters) => Promise<ApiResult<ProductLedgerResult>>;
-        'vendor-stock': () => Promise<ApiResult<VendorStockRow[]>>;
+        'vendor-stock': (payload?: { as_of_date?: string }) => Promise<ApiResult<VendorStockRow[]>>;
         'sale-analysis': (payload?: SaleReportFilters) => Promise<ApiResult<SaleAnalysisRow[] | SaleAnalysisRegionGroup[]>>;
         'sale-report': (payload?: SaleReportFilters) => Promise<ApiResult<SaleReportRow[] | SaleReportRegionGroup[]>>;
         'vendor-report': (payload?: VendorReportFilters) => Promise<ApiResult<VendorReportRow[]>>;
@@ -2547,6 +2578,24 @@ export async function closeThisWindow(): Promise<boolean> {
   if (!window.api) return false;
   const res = await window.api.windows.closeSelf();
   return res.ok && res.data.closed;
+}
+
+// The main window's "Open Windows" list (components/OpenWindowsMenu.tsx): every open child window,
+// titled by its page name, and bringing one to the front (restoring it if minimized).
+export interface OpenWindowRow {
+  id: number;
+  title: string;
+  minimized: boolean;
+}
+
+export async function listOpenWindows(): Promise<ApiResult<OpenWindowRow[]>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.windows.list();
+}
+
+export async function focusOpenWindow(id: number): Promise<ApiResult<{ focused: boolean }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.windows.focus({ id });
 }
 
 export async function updateCredentials(payload: { currentPassword: string; username?: string; newPassword?: string }): Promise<ApiResult<{ username: string }>> {
@@ -3595,8 +3644,8 @@ export const reports = {
     window.api ? window.api.reports.production(payload).then(r => mapResult(r, rows => rows.map(normalizeStockMovementRow))) : Promise.resolve(NO_BRIDGE),
   productLedger: (payload?: ProductLedgerFilters) =>
     window.api ? window.api.reports['product-ledger'](payload).then(r => mapResult(r, normalizeProductLedgerResult)) : Promise.resolve(NO_BRIDGE),
-  vendorStock: () =>
-    window.api ? window.api.reports['vendor-stock']() : Promise.resolve(NO_BRIDGE),
+  vendorStock: (payload?: { as_of_date?: string }) =>
+    window.api ? window.api.reports['vendor-stock'](payload) : Promise.resolve(NO_BRIDGE),
   saleAnalysis: (payload?: SaleReportFilters) =>
     window.api ? window.api.reports['sale-analysis'](payload) : Promise.resolve(NO_BRIDGE),
   saleReport: (payload?: SaleReportFilters) =>

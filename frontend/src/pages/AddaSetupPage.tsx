@@ -6,8 +6,11 @@ import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/
 import { addas as addasApi, listCities, type AddaRow, type CityRow } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function AddaSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [addas, setAddas] = useState<AddaRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
   const [addaSearch, setAddaSearch] = useState('');
@@ -39,7 +42,7 @@ export default function AddaSetupPage() {
     if (cRes.ok) setCities(cRes.data);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, dataVersion]);
 
   const toggleRouteCity = (cityId: number) => {
     setRouteCityIds(prev => prev.includes(cityId) ? prev.filter(id => id !== cityId) : [...prev, cityId]);

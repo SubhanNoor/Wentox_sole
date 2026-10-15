@@ -24,6 +24,7 @@ import { toDateInputValue, formatDate, asNavEntries, type NavEntry } from '@/lib
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 // Cheque disposal (deposit/endorse/bounce/return) moved to the consolidated Cheque page's
 // Disposal tab — see ChequePage.tsx. This page keeps only receipt entry/records.
@@ -47,6 +48,8 @@ function lineKey(line: api.ReceiptVoucherLineRow): string | null {
 }
 
 export default function ReceiptsPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const { dispatch } = useApp();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
@@ -129,7 +132,7 @@ export default function ReceiptsPage() {
     });
     refreshAllSettlements();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshAllVouchers, refreshAllSettlements]);
+  }, [refreshAllVouchers, refreshAllSettlements, dataVersion]);
 
   // Every Receipt voucher_no currently sitting as a deleted gap — merged into the browse lists
   // below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop. Unlike Sale Bill etc.,
@@ -140,7 +143,7 @@ export default function ReceiptsPage() {
     const res = await api.receiptVouchers.listDeletedNumbers();
     if (res.ok) setDeletedNumbers(res.data);
   }, []);
-  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers, dataVersion]);
 
   // ── Real-receipt form (mirrors PurchasePage.tsx's mode structure) ──
   // Persisted with the rest of the draft (2026-08-31): if the strip was mid-correction of an

@@ -11,6 +11,7 @@ import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const STATUS_STYLES: Record<ChequeStatus, string> = {
   PENDING: 'bg-amber-50 text-amber-800 border-amber-200',
@@ -29,6 +30,8 @@ const DISPOSITION_LABELS: Record<ChequeDispositionType, string> = {
 };
 
 export default function ChequesTab() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [cheques, setCheques] = useState<ChequeRow[]>([]);
   const [allocationsByReceipt, setAllocationsByReceipt] = useState<Record<number, ChequeAllocationRow[]>>({});
   const [vendors, setVendors] = useState<VendorRow[]>([]);
@@ -133,7 +136,7 @@ export default function ChequesTab() {
     api.listVendors().then(res => { if (res.ok) setVendors(res.data); });
     api.bankAccounts.list().then(res => { if (res.ok) setBanks(res.data); });
     api.listBusinessAccounts().then(res => { if (res.ok) setBusinessAccounts(res.data); });
-  }, [loadCheques]);
+  }, [loadCheques, dataVersion]);
 
   function unallocatedFor(c: ChequeRow): number {
     if (c.cheque_status === 'BOUNCED' || c.cheque_status === 'RETURNED') return 0;

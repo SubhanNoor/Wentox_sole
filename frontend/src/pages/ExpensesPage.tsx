@@ -27,6 +27,7 @@ import { toDateInputValue, formatDate, asNavEntries } from '@/lib/utils';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -35,6 +36,8 @@ const today = () => new Date().toISOString().split('T')[0];
 const NON_TERMINAL_CHEQUE_STATUS = new Set(['PENDING', 'DEPOSITED', 'ENDORSED', 'PARTIALLY_ENDORSED']);
 
 export default function ExpensesPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const { dispatch } = useApp();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
@@ -102,7 +105,7 @@ export default function ExpensesPage() {
     });
     refreshCheques();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshAllVouchers, refreshCheques]);
+  }, [refreshAllVouchers, refreshCheques, dataVersion]);
 
   // Every Payment voucher_no currently sitting as a deleted gap — merged into the browse lists
   // below so First/Prev/Next/Last can show "#N — Deleted" as an actual stop. Unlike Sale Bill etc.,
@@ -113,7 +116,7 @@ export default function ExpensesPage() {
     const res = await api.expenseVouchers.listDeletedNumbers();
     if (res.ok) setDeletedNumbers(res.data);
   }, []);
-  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers, dataVersion]);
 
   // ── Real-expense form (mirrors ReceiptsPage.tsx's mode structure) ──
   // Persisted with the rest of the draft (2026-08-31): if the strip was mid-correction of an

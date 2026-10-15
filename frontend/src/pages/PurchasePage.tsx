@@ -24,6 +24,7 @@ import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { exportRowsToExcel } from '@/lib/export';
 import wentoxLogo from '@/assets/wentox_logo.png';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -55,6 +56,8 @@ function newItemUid(): string {
 }
 
 export default function PurchasePage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const { dispatch } = useApp();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
@@ -125,7 +128,7 @@ export default function PurchasePage() {
       if (data && data.length === 0 && currentIsPosted) resetToNewPurchase();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshPurchases, refreshUnposted]);
+  }, [refreshPurchases, refreshUnposted, dataVersion]);
 
   // Mode: 'view' | 'edit' | 'new'. Persisted with the rest of the draft (2026-08-31) — a page
   // restored into 'view' has Save disabled, so the state it was left in has to survive too.
@@ -170,7 +173,7 @@ export default function PurchasePage() {
     const res = await api.draftPurchases.listDeletedNumbers();
     if (res.ok) setDeletedNumbers(res.data);
   }, []);
-  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers, dataVersion]);
 
   // A New Purchase's own in-progress fields persist across switching pages AND an app restart
   // (usePersistentField — see src/hooks/usePersistentField.ts), so typing one up and getting

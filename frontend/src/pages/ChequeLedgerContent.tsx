@@ -7,21 +7,27 @@ import * as api from '@/lib/api';
 import type { ChequeRow, IssuedChequeRow, ChequeAllocationRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { closePreviewWindow } from '@/components/reports/previewWindow';
+import LiveReportDocument from '@/components/reports/LiveReportDocument';
+import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 // Every event a cheque's life can produce — a small fixed enum, so distinct colors per event
 // (same spirit as ChequesTab.tsx's own STATUS_STYLES) don't run into the "badge color from
 // arbitrary text" issue fixed elsewhere (Overall Search, Current Stock).
 type EventType = 'Received' | 'Issued' | 'Deposited' | 'Endorsed to Vendor' | 'Endorsed to Expense' | 'Bounced' | 'Returned';
 
-const EVENT_STYLES: Record<EventType, string> = {
-  Received: 'bg-slate-100 text-slate-700 border-slate-300',
-  Issued: 'bg-slate-100 text-slate-700 border-slate-300',
-  Deposited: 'bg-blue-50 text-blue-700 border-blue-200',
-  'Endorsed to Vendor': 'bg-violet-50 text-violet-700 border-violet-200',
-  'Endorsed to Expense': 'bg-violet-50 text-violet-700 border-violet-200',
-  Bounced: 'bg-rose-50 text-rose-700 border-rose-200',
-  Returned: 'bg-orange-50 text-orange-700 border-orange-200',
+// Event colours in the report document (the old on-screen badges' text colours, per the user
+// 2026-10-14), as hex: the document is drawn with inline styles so the preview carries them too.
+const EVENT_TEXT_COLOR: Record<EventType, string> = {
+  Received: '#334155',
+  Issued: '#334155',
+  Deposited: '#1d4ed8',
+  'Endorsed to Vendor': '#6d28d9',
+  'Endorsed to Expense': '#6d28d9',
+  Bounced: '#be123c',
+  Returned: '#c2410c',
 };
 
 // One row per EVENT, not per cheque — an endorsement stays on the ledger even after it's later
@@ -135,6 +141,8 @@ function issuedEvents(e: IssuedChequeRow): LedgerEvent[] {
 }
 
 export function ChequeLedgerContent() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [events, setEvents] = useState<LedgerEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
@@ -197,7 +205,7 @@ export function ChequeLedgerContent() {
     }
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, dataVersion]);
 
   // "Show Print Preview" opens a new window on this same filtered ledger (per the user,
   // 2026-09-03), instead of an in-page overlay.
@@ -268,15 +276,15 @@ export function ChequeLedgerContent() {
           {ledgerRows.length === 0 ? (
             <tr><td colSpan={9} style={{ border: '1px solid #000000', padding: '12px', textAlign: 'center', fontStyle: 'italic', color: '#888' }}>No cheque events found.</td></tr>
           ) : ledgerRows.map(r => (
-            <tr key={r.key}>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{formatDate(r.date)}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.party}</td>
+            <tr key={r.key} style={{ opacity: r.reversed ? 0.6 : 1 }}>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', color: REPORT_COLORS.muted }}>{formatDate(r.date)}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{r.party}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{r.chequeNo}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.dueDate ? formatDate(r.dueDate) : '-'}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold' }}>{r.chequeType}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.eventType}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontWeight: 'bold', color: EVENT_TEXT_COLOR[r.eventType] }}>{r.eventType}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{r.bank}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(r.amount)}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: REPORT_COLORS.text }}>{formatCurrency(r.amount)}</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', color: r.reversed ? '#cc0000' : '#888' }}>{r.reversed ? 'REVERSED' : '-'}</td>
             </tr>
           ))}
@@ -287,7 +295,7 @@ export function ChequeLedgerContent() {
                 Received {formatCurrency(totals.totalReceived)} · Issued {formatCurrency(totals.totalIssued)}
               </span>
             </td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totals.totalAmount)}</td>
+            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.gold }}>{formatCurrency(totals.totalAmount)}</td>
             <td style={{ border: '1px solid #000000', padding: '6px' }} />
           </tr>
         </tbody>
@@ -359,79 +367,14 @@ export function ChequeLedgerContent() {
         </button>
       </div>
 
-      <div className="card-white p-6 md:p-8 bg-white border">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-sm">
-            <thead>
-              <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                <th className="p-3 pl-4">Date</th>
-                <th className="p-3">Party</th>
-                <th className="p-3">Cheque No.</th>
-                <th className="p-3">Due Date</th>
-                <th className="p-3">Type</th>
-                <th className="p-3">Event</th>
-                <th className="p-3">Bank</th>
-                <th className="p-3 text-right">Amount</th>
-                <th className="p-3 text-center">Reversed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={9} className="text-center p-8 text-slate-400">Loading…</td></tr>
-              ) : ledgerRows.length === 0 ? (
-                <tr><td colSpan={9} className="text-center p-8 text-slate-400">No cheque events match this filter.</td></tr>
-              ) : (
-                ledgerRows.map(r => (
-                  <tr key={r.key} className={`border-b hover:bg-slate-50/50 ${r.reversed ? 'opacity-60' : ''}`} style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 text-xs text-slate-600">{formatDate(r.date)}</td>
-                    <td className="p-3 font-semibold text-slate-700">{r.party}</td>
-                    <td className="p-3 font-mono font-semibold text-slate-800">{r.chequeNo}</td>
-                    <td className="p-3 text-xs text-slate-600">{r.dueDate ? formatDate(r.dueDate) : '-'}</td>
-                    <td className="p-3">
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300">{r.chequeType}</span>
-                    </td>
-                    <td className="p-3">
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${EVENT_STYLES[r.eventType]}`}>
-                        {r.eventType}
-                      </span>
-                    </td>
-                    <td className="p-3 text-slate-600">{r.bank}</td>
-                    <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(r.amount)}</td>
-                    <td className="p-3 text-center">
-                      {r.reversed && (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-rose-50 text-rose-700 border-rose-200">
-                          Reversed
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-            {ledgerRows.length > 0 && (
-              <tfoot>
-                <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  {/* 7 + 1 + 1 = 9, matching the header exactly. The received/issued split rides
-                      alongside the label, where there is room for it — the Reversed column is a
-                      badge column barely wider than the word, and it cannot hold two figures. */}
-                  <td colSpan={7} className="p-4 text-left font-lora">
-                    TOTAL ({ledgerRows.length} events)
-                    <span className="ml-3 font-inter text-xs font-semibold text-slate-500">
-                      Received {formatCurrency(totals.totalReceived)} · Issued {formatCurrency(totals.totalIssued)}
-                    </span>
-                  </td>
-                  <td className="p-4 text-right whitespace-nowrap" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(totals.totalAmount)}</td>
-                  <td className="p-4" />
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-      </div>
+      {/* The report: the same document the print preview prints (Product Ledger layout, per the user 2026-10-14). */}
+      <LiveReportDocument loading={loading && !hasLoadedOnce}>
+        {renderPrintableDocument()}
+      </LiveReportDocument>
 
       <ReportPrintPreviewModal
         isOpen={isPreviewOpen}
-        onClose={() => setIsPreviewOpen(false)}
+        onClose={() => { setIsPreviewOpen(false); closePreviewWindow(); }}
         title="Cheque Ledger - Print Preview"
         orientation="landscape"
         onExportExcel={handleExportExcel}

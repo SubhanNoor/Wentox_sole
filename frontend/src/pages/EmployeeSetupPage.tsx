@@ -10,10 +10,13 @@ import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 type ListTab = 'workers' | 'salaried';
 
 export default function EmployeeSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [employeeList, setEmployeeList] = useState<EmployeeRow[]>([]);
   const [stageList, setStageList] = useState<StageRow[]>([]);
   const [cities, setCities] = useState<CityRow[]>([]);
@@ -87,7 +90,7 @@ export default function EmployeeSetupPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, dataVersion]);
 
   const handleOpenAddModal = (type: EmployeeType) => {
     setSelectedId(null);

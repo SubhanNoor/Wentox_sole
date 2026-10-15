@@ -63,7 +63,7 @@ function resolveDateRange(filters) {
 // cartons/extra-pairs conversion); kept as its own reports:stock channel per the milestone's
 // naming, rather than folding the two modules together.
 function stock(filters = {}) {
-  return stockService.currentStock({ article_id: filters.article_id, category_id: filters.category_id });
+  return stockService.currentStock({ article_id: filters.article_id, category_id: filters.category_id, as_of_date: filters.as_of_date });
 }
 
 function production(filters = {}) {
@@ -78,14 +78,52 @@ function production(filters = {}) {
 // UC-29/UC-38 Product Ledger — every stock_movements row (PRODUCTION, SALE, SALE_RETURN, OPENING,
 // ADJUSTMENT), split into Debit(IN)/Credit(OUT) by the sign SQL Server already enforces
 // (CK_stock_movements_sign): positive = IN, negative = OUT.
+//
+// `products` is the client's one-line-per-product view (2026-10-12): one line per product+colour
+// with Opening (stock before date_from), In, Out and Balance = Opening + In - Out, i.e. the stock
+// on date_to. A product+colour appears if it had opening stock or moved in the period. Each row
+// also carries `running_balance` within its product+colour, for the Detailed view. `rows`,
+// `total_in`, `total_out` and `net` are unchanged — the Stock page's movement ledger still reads them.
 async function productLedger(filters = {}) {
-  const rows = await repository.productLedger({
+  const range = resolveDateRange(filters);
+  const articleFilters = {
     article_id: filters.article_id,
     category_id: filters.category_id,
     vendor_id: filters.vendor_id,
     search: filters.search,
-    ...resolveDateRange(filters),
-  });
+  };
+  const [rows, openings] = await Promise.all([
+    repository.productLedger({ ...articleFilters, ...range }),
+    repository.productLedgerOpening({ ...articleFilters, ...range }),
+  ]);
+
+  const products = new Map();
+  const productFor = (r) => {
+    let p = products.get(r.variant_id);
+    if (!p) {
+      p = {
+        variant_id: r.variant_id,
+        article_id: r.article_id,
+        article_code: r.article_code,
+        article_name: r.article_name,
+        color: r.color,
+        category_name: r.category_name,
+        vendor_name: r.vendor_name,
+        opening: 0,
+        in: 0,
+        out: 0,
+        balance: 0,
+      };
+      products.set(r.variant_id, p);
+    }
+    return p;
+  };
+  for (const o of openings) {
+    const p = productFor(o);
+    p.opening = o.opening;
+    p.balance = o.opening;
+  }
+
   let totalIn = 0;
   let totalOut = 0;
   const mapped = rows.map((r) => {
@@ -93,16 +131,31 @@ async function productLedger(filters = {}) {
     const credit = r.qty_pairs < 0 ? -r.qty_pairs : 0;
     totalIn += debit;
     totalOut += credit;
-    return { ...r, debit, credit };
+    const p = productFor(r);
+    p.in += debit;
+    p.out += credit;
+    p.balance += r.qty_pairs;
+    return { ...r, debit, credit, running_balance: p.balance };
   });
-  return { rows: mapped, total_in: totalIn, total_out: totalOut, net: totalIn - totalOut };
+
+  const productList = [...products.values()].sort((a, b) =>
+    String(a.article_code).localeCompare(String(b.article_code), undefined, { numeric: true })
+    || String(a.color).localeCompare(String(b.color)));
+  const totals = productList.reduce((t, p) => ({
+    opening: t.opening + p.opening, in: t.in + p.in, out: t.out + p.out, balance: t.balance + p.balance,
+  }), { opening: 0, in: 0, out: 0, balance: 0 });
+
+  return {
+    rows: mapped, total_in: totalIn, total_out: totalOut, net: totalIn - totalOut,
+    products: productList, product_totals: totals,
+  };
 }
 
 // UC-30 Vendor Stock — read side; the write side (reduce quantity) lives on stock.service.js
 // (stock:reduce-vendor-stock), since Reports itself is read-only (UC-30's own note is the one
 // exception, and it belongs with the rest of the stock-writing surface, not here).
-function vendorStock() {
-  return repository.vendorStock();
+function vendorStock(filters = {}) {
+  return repository.vendorStock({ as_of_date: filters.as_of_date });
 }
 
 // LED-02 (changes-14-09-26.md, 2026-09-15): "mode of payment" — confirmed with the client to apply
@@ -385,10 +438,31 @@ function groupByRegion(rows) {
   return Array.from(byRegion.values());
 }
 
+// The party's real account balance on the report's To date (per the user, 2026-10-13): the same
+// figure its own ledger closes on — opening balance, journal vouchers and everything before the
+// period included, not just this period's sales minus payments. No To date = every posted entry.
+// Debit-positive, same sign as the ledger: a customer who owes us is positive, a vendor we owe is
+// negative.
+async function partyBalances(range) {
+  return repository.businessAccountBalancesAsOf(range.date_to || null);
+}
+
+// Sale Report / Sales Analysis rows: customers with activity in the period, PLUS customers with no
+// activity who still carry a balance on the To date (per the user, 2026-10-14 — e.g. a customer
+// whose only entry is an opening credit). Leaving those out made the Balance column's total short
+// of what customers actually owe or are owed. Same 2-decimal zero tolerance as Skip Zero Balances.
+async function saleCustomerRows(range) {
+  const [rows, balances] = await Promise.all([repository.saleAggregateByCustomer(range), partyBalances(range)]);
+  return rows
+    .map((r) => ({ ...r, balance: balances.get(r.ba_id) ?? 0 }))
+    .filter((r) => r.has_activity === 1 || Math.abs(r.balance) >= 0.005);
+}
+
 // UC-31 Sale Analysis — Total Sales / Sale Returns / Payment Received, Customer Wise (flat) or
-// Region Wise (region -> its customers).
+// Region Wise (region -> its customers). `balance` is the customer's account balance (above).
 async function saleAnalysis(filters = {}) {
-  const rows = await repository.saleAggregateByCustomer(resolveDateRange(filters));
+  const range = resolveDateRange(filters);
+  const rows = await saleCustomerRows(range);
   const mapped = rows.map((r) => ({
     customer_id: r.customer_id,
     customer_name: r.customer_name,
@@ -403,6 +477,7 @@ async function saleAnalysis(filters = {}) {
     // Reported as its own ROW under the party in the UI, not as another column — a JV reduces what
     // is owed but is not money collected, so it must never be folded into total_payment.
     total_jv: Number(r.total_jv),
+    balance: r.balance,
   }));
   return filters.group_by === 'region' ? groupByRegion(mapped) : mapped;
 }
@@ -411,8 +486,10 @@ async function saleAnalysis(filters = {}) {
 // Net Sales = Total Sales - Commission - Sale Return (commission is payment-time only, from
 // receipts.commission — sale-time D% and invoice discounts are already inside net_value and are
 // NOT subtracted again, per UC-32's own warning).
+// `balance`: the customer's account balance on the To date (partyBalances above).
 async function saleReport(filters = {}) {
-  const rows = await repository.saleAggregateByCustomer(resolveDateRange(filters));
+  const range = resolveDateRange(filters);
+  const rows = await saleCustomerRows(range);
   const mapped = rows.map((r) => {
     const totalSales = Number(r.total_sales);
     const commission = Number(r.total_commission);
@@ -433,14 +510,21 @@ async function saleReport(filters = {}) {
       // Own row in the UI, deliberately not a column and deliberately NOT inside net_sales:
       // net_sales is what the sale was worth, a JV is goodwill given afterwards.
       total_jv: Number(r.total_jv),
+      balance: r.balance,
     };
   });
   return filters.group_by === 'region' ? groupByRegion(mapped) : mapped;
 }
 
-// UC-33 Vendor Report — Total Purchase / Purchase Return / Net Purchase / Payment Paid.
+// UC-33 Vendor Report — Total Purchase / Purchase Return / Net Purchase / Payment Paid, and
+// `balance`: the vendor's account balance on the To date (partyBalances above) — the same figure the
+// vendor's own ledger closes on.
 async function vendorReport(filters = {}) {
-  const rows = await repository.vendorReportRows({ vendor_id: filters.vendor_id, ...resolveDateRange(filters) });
+  const range = resolveDateRange(filters);
+  const [rows, balances] = await Promise.all([
+    repository.vendorReportRows({ vendor_id: filters.vendor_id, ...range }),
+    partyBalances(range),
+  ]);
   return rows.map((r) => {
     const totalPurchase = Number(r.total_purchase);
     const totalReturn = Number(r.total_return);
@@ -452,6 +536,7 @@ async function vendorReport(filters = {}) {
       net_purchase: totalPurchase - totalReturn,
       payment_paid: Number(r.total_payment),
       total_jv: Number(r.total_jv),
+      balance: r.ba_id != null ? (balances.get(r.ba_id) ?? 0) : 0,
     };
   });
 }
@@ -589,6 +674,12 @@ async function cashBook(filters = {}) {
     // shifted BOTH ends back a day in PKT — "August" was really 31-Jul to 30-Aug, silently
     // including the previous month's last day and dropping the selected month's.
     range = { date_from: toISODate(from), date_to: toISODate(to) };
+  } else if (filters.date_from || filters.date_to) {
+    // Between two dates (per the user, 2026-10-15). A missing end is the other end's day.
+    const from = filters.date_from || filters.date_to;
+    const to = filters.date_to || filters.date_from;
+    if (from > to) throw ApiError.badRequest('From date is after To date');
+    range = { date_from: from, date_to: to };
   } else if (filters.date) {
     range = { date_from: filters.date, date_to: filters.date };
   } else {

@@ -8,8 +8,11 @@ import DataListTable from '@/components/DataListTable';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function BankSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const { state } = useApp();
 
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -60,7 +63,7 @@ export default function BankSetupPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadBanks(showInactive); }, [loadBanks, showInactive]);
+  useEffect(() => { loadBanks(showInactive); }, [loadBanks, showInactive, dataVersion]);
 
   const handleOpenAddModal = () => {
     setSelectedId(null);

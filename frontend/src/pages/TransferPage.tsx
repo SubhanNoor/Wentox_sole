@@ -11,10 +11,13 @@ import {
   ArrowLeftRight, PiggyBank, Save, AlertTriangle, TrendingUp, TrendingDown, Edit
 } from 'lucide-react';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const today = () => new Date().toISOString().split('T')[0];
 
 export default function TransferPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const { state } = useApp();
 
   const [mode, setMode] = useState<'transfer' | 'deposit'>('transfer');
@@ -105,7 +108,7 @@ export default function TransferPage() {
     })();
     refreshTransfers();
     refreshDeposits();
-  }, [refreshTransfers, refreshDeposits]);
+  }, [refreshTransfers, refreshDeposits, dataVersion]);
 
   // ── Transfer form ──
   // In-progress entry fields persist across switching pages AND an app restart

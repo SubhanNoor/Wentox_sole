@@ -6,6 +6,7 @@ import { AlertTriangle, RotateCcw, Search } from 'lucide-react';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import * as api from '@/lib/api';
 import type { ChequeAllocationRow, ChequeDispositionType, IssuedChequeRow } from '@/lib/api';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const DISPOSITION_LABELS: Record<Exclude<ChequeDispositionType, 'DEPOSIT'>, string> = {
   VENDOR_PAYMENT: 'Paid to Vendor',
@@ -34,6 +35,8 @@ interface UnifiedRow {
 }
 
 export function ChequeReturnsContent() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [allocations, setAllocations] = useState<ChequeAllocationRow[]>([]);
   const [issuedCheques, setIssuedCheques] = useState<IssuedChequeRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -79,7 +82,7 @@ export function ChequeReturnsContent() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, dataVersion]);
 
   // api.cheques.endorsedAllocations() already returns exactly ACTIVE VENDOR_PAYMENT/EXPENSE_PAYMENT
   // allocations (DEPOSIT excluded server-side), and api.expenses.returnableIssuedCheques() already

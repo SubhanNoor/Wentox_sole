@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import * as api from '@/lib/api';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 /**
  * "Balance before → after" panel for the Receipts (Jamma) and Expenses (Naam) entry forms.
@@ -53,6 +54,8 @@ function balanceTone(value: number, variant: 'party' | 'money'): { label: string
 }
 
 export default function AccountBalancePanel({ baId, lines, refreshKey = 0, variant = 'party', className = '' }: AccountBalancePanelProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   // The fetched value is stored WITH the account it belongs to, so switching accounts derives its
   // way back to "loading" instead of needing a synchronous reset inside the effect (which would
   // both trip react-hooks/set-state-in-effect and briefly show the previous account's balance).
@@ -70,7 +73,7 @@ export default function AccountBalancePanel({ baId, lines, refreshKey = 0, varia
       else setFailure({ baId, message: res.error.message });
     });
     return () => { cancelled = true; };
-  }, [baId, refreshKey]);
+  }, [baId, refreshKey, dataVersion]);
 
   if (baId == null) return null;
 

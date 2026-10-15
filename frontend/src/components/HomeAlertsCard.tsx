@@ -4,10 +4,13 @@ import * as api from '@/lib/api';
 import type { AlertRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Bell, X, ChevronRight, RotateCw } from 'lucide-react';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const POLL_INTERVAL_MS = 60_000;
 
 export default function HomeAlertsCard() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const { state, dispatch } = useApp();
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -21,7 +24,7 @@ export default function HomeAlertsCard() {
     load();
     const id = setInterval(load, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, dataVersion]);
 
   async function handleRefresh() {
     setRefreshing(true);

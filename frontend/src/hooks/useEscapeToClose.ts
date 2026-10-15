@@ -33,6 +33,11 @@ if (typeof window !== 'undefined') {
   });
 }
 
+/** Is any dialog open right now? The action bar's shortcuts stand down while one is (2026-10-16). */
+export function isAnyDialogOpen(): boolean {
+  return escapeStack.length > 0;
+}
+
 export function useEscapeToClose(isOpen: boolean, onClose: () => void) {
   // Always calls the LATEST onClose, even though the pushed callback identity is stable for the
   // whole time this dialog is open — avoids a stale closure (e.g. capturing state from the instant

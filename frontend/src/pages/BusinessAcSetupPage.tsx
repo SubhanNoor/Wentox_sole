@@ -18,8 +18,11 @@ import {
 } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function BusinessAcSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
   const [charts, setCharts] = useState<ChartOfAccountRow[]>([]);
   const [regions, setRegions] = useState<RegionRow[]>([]);
@@ -73,7 +76,7 @@ export default function BusinessAcSetupPage() {
     if (ciRes.ok) setCities(ciRes.data);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, dataVersion]);
 
   const handleOpenAddModal = () => {
     setSelectedId(null);

@@ -8538,3 +8538,366 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
   the hook only matters there on a reopen with unsaved work, which isn't covered); the auto-open
   race guard is NOT caught on these 6 (their auto-open starts before the test can pick, and the
   queue alone orders that) — only Sale Bill's test catches it. Full suite passed twice in a row.
+
+### 2026-10-11 — Child windows stay in front of the main window + "Open Windows" list
+- **What:** clicking the main window used to push every open document (child) window behind it.
+  Child windows now stay above the main window while Wentox is the active app. When another app is
+  active they stack normally, so they don't cover Chrome, WhatsApp, etc. The main window's header
+  has an "Open Windows" button (with a count badge) listing every child window by page name;
+  clicking one restores it if minimized and brings it to the front.
+- **How:** `windowManager.js` sets every child's `setAlwaysOnTop()` on any Wentox window's
+  focus/blur, deferred one tick so moving between two Wentox windows doesn't flicker. Native
+  dialogs aren't BrowserWindows, so while one is open the app counts as inactive and the dialog
+  appears above the children. `parent` still isn't used (it broke child minimize/maximize on
+  Linux; the client runs Windows). New channels `windows:list` and `windows:focus`. Child windows
+  set `document.title` to "Page — Sub-tab", which Electron mirrors onto the window, so the taskbar
+  and the list both show the page name.
+- **Verified:** new `e2e/childWindows.onTop.e2e.js` (child floats, still floats after the main
+  window takes focus, list restores and focuses a minimized child, stops floating once no Wentox
+  window has focus); full e2e suite 16/16.
+- **Follow-up (same day):** the newest window sometimes opened BEHIND the older ones. Ubuntu's
+  focus-stealing prevention refused it focus ("'Sale Bill' is ready" notification), and only
+  focused windows were being floated. A new child is now floated, raised (`moveTop`) and then
+  focused explicitly. The `childWindows` Set also keeps most-recently-used order (a child moves to
+  the end on focus), and re-raising after returning from another app walks it in that order, so
+  the last-used window stays on top. New e2e test reads the real X11 stacking order
+  (`_NET_CLIENT_LIST_STACKING`) and checks both; full suite 17/17.
+- **Files:** `electron/windowManager.js`, `src/ipc/windows.ipc.js`, `e2e/childWindows.onTop.e2e.js`;
+  frontend `components/OpenWindowsMenu.tsx` (new), `components/AppLayout.tsx`, `lib/api.ts`.
+
+### 2026-10-12 — Product Ledger: one line per product+colour, Detailed view, This Week
+- **What (client request):** the Reports Hub Product Ledger (menu 4.2) now shows one line per
+  product+colour: Opening (stock before From), In, Out, Balance (stock on the To date). A
+  Summary/Detailed switch (default Summary): Detailed groups each product+colour's movements under
+  a heading with an Opening Stock row, a running balance and a subtotal. A "This Week" button sets
+  From/To to Monday of this week → today. Print preview and Excel export follow the chosen view.
+  The screen now shows the same document the preview prints (no separate on-screen table), so it
+  carries over unchanged into the planned "filter screen → straight to preview" restructure.
+- **How:** `reports.repository.js#productLedgerOpening` sums each variant's movements before
+  date_from (same product filters as the rows, shared via `productLedgerArticleConditions`);
+  `reports.service.js#productLedger` adds `products`, `product_totals` and per-row
+  `running_balance`. Existing `rows`/`total_in`/`total_out`/`net` are unchanged, so the Stock page's
+  movement-ledger tab is unaffected. New `getWeekStartDate()` in `frontend/src/lib/utils.ts`.
+- **Verified:** `test/reports.productLedger.test.js` (opening/in/out/balance per colour, movement
+  after To excluded, running balance, zero-stock-no-movement products left out, old fields
+  unchanged); `e2e/productLedger.summary.e2e.js` (summary line, Detailed running balance, This Week
+  dates). Backend 27/27; e2e 18/18 (Journal Voucher's e2e failed once in one full run and passed
+  alone twice plus the next full run — flaky, unrelated).
+- **Files:** `src/repositories/reports.repository.js`, `src/services/reports.service.js`,
+  `test/reports.productLedger.test.js`, `e2e/productLedger.summary.e2e.js`; frontend
+  `pages/ProductLedgerContent.tsx`, `pages/ReportStockPage.tsx` (empty-result default only),
+  `lib/api.ts`, `lib/utils.ts`.
+- **Follow-up (2026-10-13):** "This Week" was a button that couldn't be switched off. It is now a
+  Date Range / This Week radio pair: This Week sets Monday → today, Date Range restores the dates
+  from before, and editing a date while on This Week switches back to Date Range. e2e test extended.
+
+### 2026-10-13 — Balance column on Sale Report, Vendor Report and the Stock movement ledger
+- **What (per the user):** Sale / Bill List (5.10) and the Vendor Report summary (3.18) get a
+  Balance column: the party's REAL account balance on the To date — the same figure its own ledger
+  closes on (opening balance, earlier bills, JVs all included), not this period's net. Sales
+  Analysis (5.2) switched to the same figure (it used to compute sales - returns - payments for the
+  period only). The Stock page's Product Movement Ledger tab gets a running Balance per
+  product+colour (stock after each movement), total = stock of the listed products on the To date.
+  Screen, print preview and Excel all carry it. Group/overall rows sum their customers' balances.
+- **How:** `saleAggregateByCustomer` / `vendorReportRows` now also return `ba_id`;
+  `reports.service.js#partyBalances` reads `businessAccountBalancesAsOf(date_to)` (null = all
+  entries) and saleAnalysis/saleReport/vendorReport attach `balance` by ba_id. Debit-positive like
+  the ledger: a customer who owes is positive, a vendor we owe is negative (shown in brackets).
+- **Verified:** `test/reports.partyBalance.test.js` (balance = accountLedger/vendorLedger closing
+  balance; opening balance and pre-period purchase included; balance follows the To date);
+  `e2e/vendorReport.balance.e2e.js`. Backend 29/29. Full e2e run had 6 timeouts under heavy machine
+  load (load avg ~4, ~2 GB free); all 10 affected tests passed on rerun.
+- **Files:** `src/repositories/reports.repository.js`, `src/services/reports.service.js`,
+  `test/reports.partyBalance.test.js`, `e2e/vendorReport.balance.e2e.js`; frontend
+  `pages/SaleReportPage.tsx`, `pages/SaleAnalysisPage.tsx`, `pages/VendorReportPage.tsx`,
+  `pages/ReportStockPage.tsx`, `lib/api.ts`.
+
+### 2026-10-14 — "Skip Zero Balances" on every report with a Balance per row
+- **What (per the user):** the option Payment Trail All Accounts / Customer Balances / Vendor
+  Balances already had is now also on Vendor Report (summary), Customer Report + Business Ledger
+  (account directory), Sales Analysis, Sale / Bill List, and Stock Ledger (lines whose stock on the
+  To date is zero). Same on/off radio everywhere; carried into the "Show Print Preview" window.
+  Group/overall rows and totals are computed from the rows still shown.
+- **How:** the control moved into a shared `frontend/src/components/SkipZeroToggle.tsx` (plus
+  `isZeroBalance`, the same < 0.005 tolerance Overall Trail used); OverallTrailContent now uses it
+  too. Frontend only — filtering is client-side on the balance the backend already returns.
+- **Verified:** `e2e/vendorReport.balance.e2e.js` extended (zero-balance vendor disappears and
+  comes back, owed vendor stays); full e2e 19/19. Lint error count unchanged from the committed
+  files (16, all pre-existing set-state-in-effect / use-before-declare).
+- **Files:** frontend `components/SkipZeroToggle.tsx` (new), `pages/OverallTrailContent.tsx`,
+  `pages/VendorReportPage.tsx`, `pages/ReportKhaataPage.tsx`, `pages/SaleAnalysisPage.tsx`,
+  `pages/SaleReportPage.tsx`, `pages/ProductLedgerContent.tsx`; `e2e/vendorReport.balance.e2e.js`.
+
+### 2026-10-14 — Pilot: Vendor Report opens on a filter screen, then straight to print preview
+- **What (client request, option A chosen by the user):** Vendor Report (3.18) shows NO data on
+  screen any more. It opens on a small filter screen — Vendor (searchable; "All vendors (summary)"
+  or one vendor for its ledger statement), From/To, Skip Zero Balances (summary only) — and
+  Preview (or Enter) loads the data and opens the standard print preview in the SAME window (no
+  new window). Closing the preview returns to the filter screen with every choice kept. Vendor and
+  Skip Zero are remembered across visits; dates start fresh (last 3 months → today) so a stale To
+  date can't hide recent entries. The on-screen summary table, the "View Ledger" screen and the
+  "Switch Vendor" bar are gone. The printed summary now also carries the "Journal Voucher applied"
+  rows, which until now only existed on screen.
+- **How:** new shared `frontend/src/components/reports/ReportFilterScreen.tsx` (+ `ReportFilterField`)
+  for every report to reuse: a form whose submit = Preview, error banner, loading state; focus rests
+  on Preview (`data-new-action`, AppLayout's arrival rule, and again when the preview closes) because
+  the default first-field focus popped the Vendor dropdown open over the form. Remembered filters
+  use the existing `usePersistentField` (page key `report-vendor`).
+- **Verified:** `e2e/vendorReport.balance.e2e.js` rewritten for the new flow (no table on the filter
+  screen; Enter opens the preview; Balance 500 owed from a pre-period purchase; closing keeps the
+  dates; Skip Zero drops the zero vendor; picking a vendor previews its ledger statement with the
+  Opening Balance). Passed 3× in a row. Full e2e 18 pass / 1 skip under `xvfb-run` (the X11
+  stacking test skips without a window manager). E2E runs now use `xvfb-run -a` so no windows open
+  on the user's real screen.
+- **Files:** frontend `components/reports/ReportFilterScreen.tsx` (new), `pages/VendorReportPage.tsx`;
+  `e2e/vendorReport.balance.e2e.js`.
+- **Follow-up (same day, per the user):** Preview now opens the print preview in a NEW window
+  instead of over the filter screen. The filter window passes its filters (`vendor`, `fromDate`,
+  `toDate`, `skipZero`, `autoPreview=1`); the new window loads the report itself and shows only the
+  preview (or the error with a Close button). Closing the preview (X / Esc) closes that window, and
+  focus returns to the window that opened it: `windows:open` now records the opener
+  (`windowManager.js` `openerOf`), and `closeChildAndFocusMain` focuses the opener, falling back to
+  the main window as before. ReportFilterScreen's same-window refocus code was removed. e2e test
+  updated (preview arrives as a new window, nothing drawn over the filter window, Esc closes the
+  window, focus back on the filter window); passed 3×; full e2e 18 pass / 1 skip under xvfb.
+  Files: `electron/windowManager.js`, `src/ipc/windows.ipc.js`, frontend
+  `pages/VendorReportPage.tsx`, `components/reports/ReportFilterScreen.tsx`.
+
+### 2026-10-14 — Reports restructure, Group A: the printed document is the screen (Product Ledger layout)
+- **What:** per the user, every report follows the Product Ledger page's layout: filter bar on top,
+  and under it the SAME document the print preview prints (no separate on-screen table). "Show
+  Print Preview" still opens the preview in a new window. This replaces the filter-screen pilot
+  direction. Group A (reports whose on-screen tables only expanded/collapsed rows) done:
+  - **Sale Analysis (5.2) and Sale Report (5.10):** the click-to-expand Region / City / Region+City
+    table is gone; the document lists every group with its customers fully expanded, exactly as
+    printed.
+  - **Current Stock (4.3):** the report is now the "View Full Report" colour matrix (one row per
+    article, a Ctn/Prs column per colour, Total Ctn/Prs, Total Pairs), per the user. Absent colours
+    show 0/0 as the Full Report did. The page search now uses the Full Report's search (article,
+    category, or a colour the article has stock in); colour columns and the totals follow the
+    articles listed. The expandable article list, the View Full Report button/popup and the two
+    old hidden native-print blocks are gone (the remaining print block renders the same document).
+  - **Other Stock tabs** (Product Ledger, Daily/Weekly/Monthly/Overall Production) show their
+    printed document too. **Material Stock keeps its own table** for now, because the parked "−"
+    (reduce stock) button lives there.
+- **How:** new shared `frontend/src/components/reports/LiveReportDocument.tsx` (the card under the
+  filter bar: loading / empty message / the document). Each page passes its existing
+  `renderPrintableDocument()`.
+- **Verified:** new `e2e/reports.liveDocument.e2e.js`:
+  - Sale Analysis + Sale Report, Region Wise: region and customer rows on screen without a click,
+    no expand arrows, and the preview window has the same customer row.
+  - Current Stock: Black 1000 + Red 30 pairs → `83/4 | 2/6 | 85/10 | 1,030`, with Black/Red
+    columns only. Search by category works, there is no View Full Report button, and the preview
+    matches the screen.
+  - The other Stock tabs show their document, and Material Stock still has its Actions table.
+
+  Full e2e 20 pass / 1 skip under `xvfb-run`; backend tests 29/29. tsc clean, and lint counts are
+  unchanged from the committed files (pre-existing set-state-in-effect errors only). The debugger
+  subagent is not available in this session.
+- **Files:** frontend `components/reports/LiveReportDocument.tsx` (new), `pages/SaleAnalysisPage.tsx`,
+  `pages/SaleReportPage.tsx`, `pages/ReportStockPage.tsx`; `e2e/reports.liveDocument.e2e.js` (new).
+- **Next:** the straight swaps (Vendor Report back from the filter-screen pilot, Payment Trail,
+  Cheque Ledger, Cash Book), then Group B (Account/Business Ledger, Overall Trail, Vendor/Customer
+  Balances) with click-a-row-to-open-its-ledger kept on screen only.
+- **Follow-up (same day, per the user): the documents take the old on-screen colours** instead of
+  plain black and white. Shared palette `frontend/src/components/reports/reportColors.ts`
+  (`REPORT_COLORS`, `signedColor`), with the hex values of the Tailwind shades the old screens used,
+  as inline styles so the preview window carries them too:
+  - **Sale Analysis:** Total Sales rose, Sale Returns blue, Payment emerald, and Balance dark (red
+    when negative). The grand-total Balance is gold.
+  - **Sale Report:** Total Sales and Cartons dark, Commission amber, Sale Return blue, Net Sales
+    gold, Payment emerald, and Balance dark (red when negative).
+  - **Current Stock:** colours with stock in bold dark and 0/0 cells grey, as on the old Full Report.
+    Category is grey, Total Pairs is red at ≤ 0, and the total is gold.
+  - **Production tabs:** colour, category and unit in grey, and total pairs in gold. The movement
+    ledger's colour and vendor are grey; its In, Out and Balance columns were already coloured.
+
+  Printing on paper is still black and white: `index.css`'s `@media print` rule
+  `.excel-print-table td { color: #000 !important }` wins, the same as for Product Ledger's colours.
+  Report e2e tests re-run green; tsc clean; lint counts unchanged.
+
+### 2026-10-14 — Reports restructure, the rest: every report shows its printed document
+- **What (per the user's decisions, 2026-10-14):**
+  - **Vendor Report:** back from the filter-screen pilot to the Product Ledger layout: Vendor picker,
+    From/To, Skip Zero, and the summary or the ledger statement live underneath. It always starts
+    fresh; the remembered vendor and Skip Zero are dropped.
+    `components/reports/ReportFilterScreen.tsx` is deleted.
+  - **Payment Trail, Cheque Ledger:** the screen shows the document. Cheque events keep their
+    badge colours as text colours, and reversed events are dimmed.
+  - **Cash Book:** the screen shows the document. The **Bank Transfers** and **Cheques Deposited**
+    tables were screen-only and are now part of the printed document. The two balance checks
+    (Cheq./Online ties, cash matches the summary) and the note under them moved into the document.
+  - **Customer Report / Business Ledger (3.1 / 3.9):**
+    - With no account picked, the screen shows a new printed **Accounts List**: Code, Name, Main
+      Account, [Category], City, and Balance as on the To date, with a total. Search and Skip Zero
+      still work.
+    - Clicking a row (or Enter) opens that account's statement. **← Back to list** returns.
+    - The account picker in the filter bar does the same. The old directory, Switch Account bar
+      and Opening Balance chip are gone.
+  - **Overall Trail / Vendor Balances / Customer Balances:** the screen shows the trial-balance
+    document, and clicking an account row opens its ledger, which also shows the document.
+    Aggregate rows are not clickable.
+  - Row clicks exist only in the on-screen copy (`report-row-link`, `index.css`). The preview's
+    copy is plain.
+  - **Every report:** closing the preview in a "Show Print Preview" window closes that window, and
+    focus returns to the opener. Shared `components/reports/previewWindow.ts`.
+  - **Sale Report / Sales Analysis:** customers with no activity in the period but a non-zero
+    balance on the To date are now listed (e.g. U2 SHOES, opening credit 25,000). Customers with
+    no activity and no balance stay out.
+    - `reports.repository.js#saleAggregateByCustomer` now returns every customer with a
+      `has_activity` flag.
+    - `reports.service.js#saleCustomerRows` keeps active rows or rows with |balance| ≥ 0.005.
+    - The frontend's activity filters also let a non-zero balance through.
+  - Colours for all of these come from the old screens, via `reportColors.ts`. Paper stays black
+    and white, per the user.
+- **Verified:**
+  - Backend 30/30 passing, including a new test in `test/reports.partyBalance.test.js`: an idle
+    customer with a credit balance is listed in both reports, and an idle zero one is not.
+  - e2e:
+    - `vendorReport.balance.e2e.js` is rewritten: live summary, the preview window matches the
+      screen, Esc closes it with focus back on the report, Skip Zero, and the vendor ledger
+      Opening Balance.
+    - `reports.liveDocument.e2e.js` adds: Customer Report list balance, the plain preview with
+      Esc closing its window, clicking a row to the statement and back; Customer Balances
+      row → ledger; Payment Trail, Cash Book (with its checks) and Cheque Ledger documents on
+      screen.
+    - Fixed a search race in the Current Stock test.
+
+    Full e2e 22 pass / 1 skip under `xvfb-run`. tsc is clean. Lint is unchanged or better
+    (ReportKhaata 2→0, Vendor 3→0). The debugger subagent is not available in this session.
+- **Files:**
+  - backend: `src/repositories/reports.repository.js`, `src/services/reports.service.js`,
+    `test/reports.partyBalance.test.js`, `e2e/vendorReport.balance.e2e.js`,
+    `e2e/reports.liveDocument.e2e.js`.
+  - frontend: `components/reports/previewWindow.ts` (new), `components/reports/ReportFilterScreen.tsx`
+    (deleted), `index.css`, and pages `VendorReportPage`, `PaymentTrailPage`, `ChequeLedgerContent`,
+    `ReportCashBookPage`, `ReportKhaataPage`, `OverallTrailContent`, `SaleReportPage`,
+    `SaleAnalysisPage`, `ProductLedgerContent`, `ReportStockPage`.
+
+### 2026-10-15 — A date on every report
+- **What (per the user):**
+  - The balance reports (Overall Trail, Vendor/Customer Balances, and the account lists) keep a
+    single changeable **As on** date, which they already had.
+  - **Current Stock** and **Material Stock** get an **As on** date. Only stock movements up to
+    that day count, and it is printed in the header ("Stock as on").
+    - Material Stock's "−" (reduce) button is disabled unless As on is today: the reduction is
+      dated today and checked against the quantity on screen.
+  - **Cash Book** gets **Between Two Dates** as a third mode, next to By Date and By Month.
+    - It defaults to the 1st of this month → today.
+    - A multi-day range shows the Date column.
+    - A reversed range is flagged and the last good book stays on screen.
+  - The production tabs stay as they are. Every other report already had From/To.
+- **How:**
+  - `stock.repository.js#currentStock`: optional `as_of_date`, applied in the stock_movements
+    JOIN so colours with nothing yet still list at 0.
+  - `reports.repository.js#vendorStock`: optional `as_of_date`.
+  - `reports.service.js`: stock and vendorStock pass it through; cashBook accepts
+    `date_from`/`date_to` and rejects From after To.
+  - `reports:vendor-stock` IPC now takes a payload.
+  - Frontend: `lib/api.ts` types; `lib/utils.ts#getMonthStartDate`; `pages/ReportStockPage.tsx`;
+    `pages/ReportCashBookPage.tsx`.
+- **Verified:**
+  - New `test/reports.asOfDates.test.js`:
+    - stock as on before, on and after a movement, including 0 before any movement
+    - material stock as on
+    - a Cash Book range equals the same month
+    - reversed range rejected
+
+    Backend 33/33 passing.
+  - `e2e/reports.liveDocument.e2e.js` checks Current Stock as on 01-01 (`83/4 | 0/0 | 83/4 | 1,000`)
+    and the Cash Book range (period and Date column). Full e2e 22 pass / 1 skip under `xvfb-run`.
+  - tsc is clean and lint counts are unchanged. The debugger subagent is not available in this
+    session.
+
+### 2026-10-15 — Live update across windows
+- **What (per the user):** a save in one window used to show in another only after closing and
+  reopening it. Now every other open window refreshes by itself.
+  - Reports, browse tabs, voucher lists (Posted/Unposted), setup lists, dropdown options inside
+    forms, account balance panels, and home alerts / notification bell all refresh.
+  - Form fields being typed in are never touched.
+- **How:**
+  - `frontend/src/lib/dataChanged.ts` (new): every IPC call goes through `lib/ipcBridge.ts`. After a
+    successful **write** (create/update/remove/reactivate/post/unpost/confirm/unconfirm, cheque
+    deposit/bounce/endorse/return/reverse, mark-cleared, stock adjust/log-production/reduce,
+    system-reset:run), it posts one message on a `BroadcastChannel` (debounced 150 ms, so a
+    multi-step save sends one).
+  - A BroadcastChannel never reaches its sender, so the window that saved isn't reloaded twice.
+  - `hooks/useDataVersion.ts` (new): a counter that goes up on each message. Screens add it to the
+    deps of the effect that runs their existing load.
+  - Effects that open a document INTO the form were deliberately left alone, so unsaved edits are
+    never overwritten. These are Sale Bill/Return's open-on-load-or-reset effect, and
+    Expenses/Receipts' open-voucher-by-id effect. Sale Bill/Return's Unposted list refreshes
+    separately.
+  - **Salary Run** and **Wage Run** list loads are NOT wired: their load also rebuilds the entry
+    grid. Wage Run's worker-ledger and recent-runs panels are wired.
+  - **Journal Voucher** is not wired: the file is locked and needs the user's approval.
+  - No flicker on refresh:
+    - `DataListTable` shows "Loading…" only when it has no rows yet.
+    - The Stock page shows "Loading…" only on a tab's first load (`loadedTabs`).
+- **Verified:**
+  - New `e2e/liveUpdate.e2e.js`: the Vendor Report window is open, a vendor is saved from the
+    main window through `window.api`, and the report row and the vendor picker option appear
+    without reopening. The test was checked to FAIL with the signal switched off.
+  - Full e2e 23 pass / 1 skip under `xvfb-run`; backend 33/33.
+  - tsc is clean. Lint across the 63 changed files: 123 errors vs 126 committed, none new.
+- **Files:**
+  - frontend: `lib/dataChanged.ts`, `hooks/useDataVersion.ts` (new), `lib/ipcBridge.ts`,
+    `components/DataListTable.tsx`, the browse tabs, panels, and report/voucher/setup pages
+    (see the diff).
+  - backend: `e2e/liveUpdate.e2e.js`.
+
+### 2026-10-15 — Live update: Journal Voucher, Salary Run, Wage Run
+- **Request:** "do jv and salary/wage run". This was the user's approval for the locked JV file.
+- **Journal Voucher** (`JournalVoucherPage.tsx`):
+  - A save in another window reloads the account list, Unposted, the JV ledger search and the
+    voucher dropdown. The deleted-numbers load follows the dropdown.
+  - The open-time "no unposted → blank entry" reset stays on-open only (a separate effect), so the
+    voucher on screen is never swapped.
+- **Salary Run / Wage Run:**
+  - The load never rebuilt the typed rows. Those rows live in their own state (overrides/items);
+    the only problem was the `loading` flag swapping the grid for "Loading…".
+  - `loadAll(quiet)` now skips the flag, and a `dataVersion` effect reloads quietly.
+  - Wage Run's worker-ledger effect dropped `dataVersion`, because the quiet reload replaces
+    runs/expenses, which already re-fetches it.
+- **Verified:**
+  - `e2e/liveUpdate.e2e.js` has 2 new tests:
+    - A customer added in the main window is pickable on an open JV.
+    - A salaried employee added in the main window joins an open Salary Run, and an amount typed
+      before the refresh is kept.
+  - Both tests FAIL against the HEAD versions of the two pages.
+  - Full e2e 25 pass / 1 skip; backend 33/33.
+  - tsc is clean. Lint for the 3 pages equals HEAD (JV 4, Salary 1, Wage 3).
+
+### 2026-10-16 — Keyboard shortcuts on the document action bar (all 8 data entry pages)
+- **Request:** shortcuts like Alt+N New and Alt+D Done. The mapping was agreed with the user, and
+  Print reuses the existing Alt+V (G-09) instead of Ctrl+P.
+  - Alt+N New, Alt+Delete Delete, Alt+R Edit Row, Alt+E Edit, Alt+S Save, Alt+D Done, Alt+C Cancel.
+  - Alt+Home/←/→/End for First/Pre./Next/Last.
+  - Alt+V Print, Alt+F Find, Alt+U Un Post, Alt+P Post, Alt+X Exit, Alt+A Save+Post,
+    Alt+Shift+P Post All. PDF and Excel get none.
+- **How:**
+  - `lib/toolbarShortcuts.ts` (new) holds the mapping, matched on `KeyboardEvent.code`. It needs
+    Alt alone, so Ctrl+Alt (AltGr) and Alt+F4 are untouched.
+  - `findVisiblePreviewButton()` moved here from AppLayout's Alt+V handler, which now uses it.
+  - `components/DocumentToolbar.tsx`: a window keydown listener (capture phase) presses the
+    matching button like a click.
+    - It does nothing when the button is disabled, when the bar is hidden (another tab), or when a
+      dialog is open (`isAnyDialogOpen()`, newly exported from `hooks/useEscapeToClose.ts`; every
+      app dialog registers there).
+    - The focused field is blurred first, so blur-commits land. The click runs a tick later, and
+      focus returns to the field if the action didn't move it.
+    - The combo is swallowed while the bar is visible, so e.g. Alt+C doesn't also flip Receipts'
+      payment-mode C letter.
+    - Alt+V is left to AppLayout when a tab shows its own "Show Print Preview".
+    - The shortcut letter is underlined in the label, and the tooltip ends with "(Alt+N)".
+  - No page file was edited; the JV page gets the keys through the shared toolbar.
+- **Verified:**
+  - `src/lib/toolbarShortcuts.test.ts` (vitest): the mapping, modifier rules and no duplicate keys.
+  - `e2e/toolbarShortcuts.e2e.js`:
+    - On all 8 pages, with the cursor in a field, every key presses exactly its own button when
+      enabled and nothing when greyed out. Clicks are intercepted, so nothing real happens.
+    - A Journal Voucher entered with keys only (Alt+N, Alt+S, Alt+S, Alt+D) makes one voucher.
+  - Full e2e 26 pass / 1 skip, with 1 flaky failure in each of two runs, each time in a different
+    old test: Product Ledger, then Purchase Master/Detail's Exit-click race ("Target page closed").
+    Both pass when re-run.
+  - Backend 33/33, vitest 20/20, tsc clean, no new lint errors.

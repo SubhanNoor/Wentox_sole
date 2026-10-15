@@ -1,16 +1,20 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Search, Eye } from 'lucide-react';
-import DataListTable from '@/components/DataListTable';
 import SearchableSelect from '@/components/SearchableSelect';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { BusinessLedgerSummaryRow, LedgerRow } from '@/lib/api';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
-import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { IS_PREVIEW_WINDOW, closePreviewWindow } from '@/components/reports/previewWindow';
+import LiveReportDocument from '@/components/reports/LiveReportDocument';
+import { REPORT_COLORS } from '@/components/reports/reportColors';
+import { getWindowParam } from '@/lib/windowParams';
 import wentoxLogo from '@/assets/wentox_logo.png';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface KhaataRow {
   date: string;
@@ -52,96 +56,95 @@ interface ReportKhaataContentProps {
   scope?: 'customer' | 'all';
 }
 
+// Type colours from the old on-screen statement's badges (per the user, 2026-10-14: the documents keep
+// the screen colours), as hex since the document is drawn with inline styles.
+const TYPE_COLOR: Record<string, string> = {
+  'Sale Bill': '#be123c',
+  'Receipt (Jamma)': '#047857',
+  'Sale Return': '#1d4ed8',
+  Commission: '#b45309',
+};
+
+const TH: React.CSSProperties = { border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' };
+const TD: React.CSSProperties = { border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' };
+
+
+type LedgerResult = { opening_balance: number; rows: LedgerRow[]; total_debit: number; total_credit: number; closing_balance: number };
+
 export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const isAllScope = scope === 'all';
 
-  const [accountBaId, setAccountBaId] = useState<number | null>(() => { const p = getWindowParam('accountBaId'); return p != null ? Number(p) : null; });
-  const [isClosing, setIsClosing] = useState(false);
-  const [accountSearch, setAccountSearch] = useState('');
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-
-  // G-03 (changes-14-09-26.md): the cursor lands in the account search box whenever the directory
-  // view is showing — on first open, and again on returning to it from a drilled-into account.
-  const accountSearchRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!accountBaId) requestAnimationFrame(() => accountSearchRef.current?.focus());
-  }, [accountBaId]);
-
-  const handleCloseDetail = () => {
-    setIsClosing(true);
-    setTimeout(() => {
-      setAccountBaId(null);
-      setIsClosing(false);
-    }, 200);
-  };
+  // Product Ledger layout (per the user, 2026-10-14): filter bar on top, the printed document under
+  // it. No account picked = the Accounts List report (balances on the To date); an account picked =
+  // its ledger statement. Clicking a row of the list on screen opens that account's statement.
+  const [accountBaId, setAccountBaId] = useState<number | null>(() => { const p = getWindowParam('accountBaId'); return p ? Number(p) : null; });
+  const [accountSearch, setAccountSearch] = useState(() => getWindowParam('accountSearch') || '');
+  const [skipZero, setSkipZero] = useState(() => getWindowParam('skipZero') === '1');
   const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  // "Show Print Preview" opens a new window on this same account's ledger (per the user,
-  // 2026-09-03), instead of an in-page overlay.
-  const handleShowPrintPreview = () => {
-    if (accountBaId == null) return;
-    api.openWindow('reports', isAllScope ? 'business-ledger' : 'account-ledger', {
-      accountBaId: String(accountBaId), fromDate, toDate, autoPreview: '1',
-    });
-  };
-
-  const [directory, setDirectory] = useState<BusinessLedgerSummaryRow[]>([]);
-  const [ledger, setLedger] = useState<{ opening_balance: number; rows: LedgerRow[]; total_debit: number; total_credit: number; closing_balance: number } | null>(null);
-  const [loading, setLoading] = useState(false);
-
+  // The Accounts List: every account's balance on the To date.
+  const [directory, setDirectory] = useState<BusinessLedgerSummaryRow[] | null>(null);
   useEffect(() => {
-    api.reports.businessLedger({ view: 'summary' }).then(res => {
-      if (res.ok && Array.isArray(res.data)) {
-        setDirectory(isAllScope ? res.data : res.data.filter(a => a.category === 'CUSTOMER'));
-      }
+    let cancelled = false;
+    api.reports.businessLedger({ view: 'summary', date_to: toDate || undefined }).then(res => {
+      if (cancelled || !res.ok || !Array.isArray(res.data)) return;
+      setDirectory(isAllScope ? res.data : res.data.filter(a => a.category === 'CUSTOMER'));
+      if (IS_PREVIEW_WINDOW && accountBaId == null) setIsPreviewOpen(true);
     });
-  }, [isAllScope]);
+    return () => { cancelled = true; };
+    // accountBaId only steers the preview window's first open; it doesn't change what loads here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAllScope, toDate, dataVersion]);
 
-  const selectedAccount = useMemo(() => directory.find(c => c.ba_id === accountBaId), [accountBaId, directory]);
+  const selectedAccount = useMemo(() => directory?.find(c => c.ba_id === accountBaId), [accountBaId, directory]);
 
-  // BL-01: search bar inside the detail view to jump straight to another account's ledger,
-  // without going back to the directory first.
-  const switcherOptions = useMemo(
-    // Parent chart account appended inline with an em-dash, same as every other business-account
-    // picker (2026-08-30, per the user). `main_account` is reports.service.js's own alias for
-    // the joined ca.name, so it's already on the row — no query change needed.
-    () => directory.map(a => ({
-      value: String(a.ba_id),
-      label: `${a.code ? `${a.name} (${a.code})` : a.name}${a.main_account ? ` — ${a.main_account}` : ''}`,
-    })),
-    [directory]
+  // Account picker. Parent chart account appended inline with an em-dash, same as every other
+  // business-account picker (2026-08-30, per the user).
+  const accountOptions = useMemo(
+    () => [
+      { value: '', label: isAllScope ? 'All accounts (list)' : 'All customers (list)' },
+      ...(directory ?? []).map(a => ({
+        value: String(a.ba_id),
+        label: `${a.code ? `${a.name} (${a.code})` : a.name}${a.main_account ? ` — ${a.main_account}` : ''}`,
+      })),
+    ],
+    [directory, isAllScope],
   );
 
-  const loadLedger = useCallback(async () => {
-    if (!accountBaId) return;
-    setLoading(true);
-    const res = await api.reports.accountLedger({ ba_id: accountBaId, date_from: fromDate || undefined, date_to: toDate || undefined });
-    if (res.ok) setLedger(res.data); else setLedger(null);
-    setLoading(false);
-  }, [accountBaId, fromDate, toDate]);
-
-  useEffect(() => { if (accountBaId) loadLedger(); }, [accountBaId, loadLedger]);
-
-  // Opened via another window's "Show Print Preview" — go straight into the preview once the
-  // account's ledger has actually loaded.
+  // The statement for the picked account. Keyed so the previous statement stays up while the next
+  // loads, and so a reply for an older choice can never land on a newer one.
+  const ledgerKey = `${accountBaId}|${fromDate}|${toDate}`;
+  const [loadedLedger, setLoadedLedger] = useState<{ key: string; ledger: LedgerResult | null } | null>(null);
   useEffect(() => {
-    if (isChildWindow() && getWindowParam('autoPreview') === '1' && accountBaId != null && ledger) {
-      setIsPreviewOpen(true);
-    }
-  }, [accountBaId, ledger]);
+    if (accountBaId == null) return;
+    let cancelled = false;
+    api.reports.accountLedger({ ba_id: accountBaId, date_from: fromDate || undefined, date_to: toDate || undefined }).then(res => {
+      if (cancelled) return;
+      setLoadedLedger({ key: ledgerKey, ledger: res.ok ? res.data : null });
+      if (IS_PREVIEW_WINDOW && res.ok) setIsPreviewOpen(true);
+    });
+    return () => { cancelled = true; };
+  }, [ledgerKey, accountBaId, fromDate, toDate, dataVersion]);
+  const ledger = accountBaId != null ? loadedLedger?.ledger ?? null : null;
 
   const filteredAccounts = useMemo(() => {
-    if (!accountSearch.trim()) return directory;
+    const list = directory ?? [];
+    const visible = skipZero ? list.filter(c => !isZeroBalance(c.closing_balance)) : list;
+    if (!accountSearch.trim()) return visible;
     const q = accountSearch.toLowerCase();
-    return directory.filter(c =>
+    return visible.filter(c =>
       c.code.toLowerCase().includes(q) ||
       c.name.toLowerCase().includes(q) ||
       c.main_account.toLowerCase().includes(q) ||
       (c.city_name || '').toLowerCase().includes(q) ||
       (isAllScope && (CATEGORY_LABELS[c.category] || c.category).toLowerCase().includes(q))
     );
-  }, [directory, accountSearch, isAllScope]);
+  }, [directory, accountSearch, isAllScope, skipZero]);
+  const listTotal = useMemo(() => filteredAccounts.reduce((s, c) => s + c.closing_balance, 0), [filteredAccounts]);
 
   // Opening Balance synthetic row + running balance — the backend already computes both.
   // LED-01 (changes-14-09-26.md, corrected 2026-09-15 per the client): a Purchase row with MORE
@@ -185,6 +188,14 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   }, [ledger, fromDate]);
 
   const handleExportExcel = () => {
+    if (accountBaId == null) {
+      const headers = ['Code', 'Account Name', 'Main Account', ...(isAllScope ? ['Category'] : []), 'City', 'Balance'];
+      const rows = filteredAccounts.map(c => [
+        c.code, c.name, c.main_account, ...(isAllScope ? [CATEGORY_LABELS[c.category] || c.category] : []), c.city_name || 'General', c.closing_balance,
+      ]);
+      exportRowsToExcel(`${isAllScope ? 'business' : 'customer'}-accounts-list`, headers, rows);
+      return;
+    }
     if (!selectedAccount) return;
     const headers = ['Date', 'Type', 'Inv #', 'Bill #', 'Narration', 'Pairs', 'Debit', 'Credit', 'Balance'];
     const rows = runningKhaata.map(r => [
@@ -193,39 +204,127 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
     exportRowsToExcel(`${isAllScope ? 'business' : 'khaata'}-ledger-${selectedAccount.name}`, headers, rows);
   };
 
-  const printTitle = isAllScope ? 'BUSINESS LEDGER STATEMENT' : 'CUSTOMER KHAATA LEDGER STATEMENT';
+  const handleShowPrintPreview = () => {
+    const params: Record<string, string> = { fromDate, toDate, autoPreview: '1' };
+    if (accountBaId != null) params.accountBaId = String(accountBaId);
+    else { params.accountSearch = accountSearch; params.skipZero = skipZero ? '1' : '0'; }
+    api.openWindow('reports', isAllScope ? 'business-ledger' : 'account-ledger', params);
+  };
 
-  const renderPrintableReport = () => (
-    <div className="excel-print-container">
-      <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
-        <div>
-          <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '90px', width: 'auto', objectFit: 'contain' }} />
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>{printTitle}</h2>
-          <p style={{ margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' }}>{selectedAccount?.name || (isAllScope ? 'All Accounts' : 'All Customers')}</p>
-          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
-            Code: {selectedAccount?.code}
-            {isAllScope && selectedAccount ? ` | Category: ${CATEGORY_LABELS[selectedAccount.category] || selectedAccount.category}` : ''}
-            {' '}| City: {selectedAccount?.city_name || 'General'}
-          </p>
-          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}</p>
-          <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>Date of Print: {formatDate(new Date())}</p>
-        </div>
+  const closePreview = () => {
+    setIsPreviewOpen(false);
+    closePreviewWindow();
+  };
+
+  const renderHeader = (title: string, lines: React.ReactNode[]) => (
+    <div className="excel-print-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #000000', marginBottom: '15px', paddingBottom: '12px' }}>
+      <div>
+        <img src={wentoxLogo} alt="Wentox Logo" style={{ height: '90px', width: 'auto', objectFit: 'contain' }} />
       </div>
+      <div style={{ textAlign: 'right' }}>
+        <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>{title}</h2>
+        {lines.map((line, i) => (
+          <p key={i} style={i === 0 ? { margin: '4px 0 0 0', fontSize: '13px', fontWeight: 'bold', color: '#111111' } : { margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>{line}</p>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderSignoff = () => (
+    <>
+      <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '35px', padding: '0 10px' }}>
+        {['Prepared By', 'Audited By', 'Authorized Sign'].map(label => (
+          <div key={label} style={{ textAlign: 'center', width: '150px' }}>
+            <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
+            <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>{label}</span>
+          </div>
+        ))}
+      </div>
+      <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
+        <div>WENTOX FOOTWEAR DISTRIBUTION</div>
+        <div>Printed: {formatDateTime(new Date())}</div>
+      </div>
+    </>
+  );
+
+  // The Accounts List (per the user, 2026-10-14 — it had no printed version before). `interactive`
+  // is the on-screen copy only: its rows open that account's statement; the preview's copy is plain.
+  const renderAccountsList = (interactive: boolean) => (
+    <div className="excel-print-container">
+      {renderHeader(isAllScope ? 'BUSINESS ACCOUNTS LIST' : 'CUSTOMER ACCOUNTS LIST', [
+        `Balances as on ${toDate ? formatDate(toDate) : formatDate(new Date())}`,
+        `${filteredAccounts.length} accounts${accountSearch.trim() ? ` matching "${accountSearch.trim()}"` : ''}${skipZero ? ' · zero balances skipped' : ''}`,
+        `Date of Print: ${formatDate(new Date())}`,
+      ])}
+      <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+        <thead>
+          <tr>
+            <th style={TH}>Code</th>
+            <th style={TH}>Account Name</th>
+            <th style={TH}>Main Account</th>
+            {isAllScope && <th style={TH}>Category</th>}
+            <th style={TH}>City</th>
+            <th style={{ ...TH, textAlign: 'right' }}>Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredAccounts.length === 0 && (
+            <tr><td colSpan={isAllScope ? 6 : 5} style={{ ...TD, textAlign: 'center', color: '#888888', padding: '12px' }}>No accounts found matching your search.</td></tr>
+          )}
+          {filteredAccounts.map(c => (
+            <tr
+              key={c.ba_id}
+              {...(interactive ? {
+                className: 'report-row-link',
+                tabIndex: 0,
+                title: 'Open this account’s statement',
+                onClick: () => setAccountBaId(c.ba_id),
+                onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter') setAccountBaId(c.ba_id); },
+              } : {})}
+            >
+              <td style={{ ...TD, fontFamily: 'monospace', color: '#475569' }}>{c.code}</td>
+              <td style={{ ...TD, fontWeight: 'bold', color: REPORT_COLORS.text }}>{c.name}</td>
+              <td style={{ ...TD, fontSize: '10px', textTransform: 'uppercase', color: REPORT_COLORS.muted }}>{c.main_account}</td>
+              {isAllScope && <td style={{ ...TD, fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#334155' }}>{CATEGORY_LABELS[c.category] || c.category}</td>}
+              <td style={{ ...TD, fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#92400e' }}>{c.city_name || 'General'}</td>
+              <td style={{ ...TD, textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(c.closing_balance) }}>{formatCurrency(c.closing_balance)}</td>
+            </tr>
+          ))}
+          <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
+            <td colSpan={isAllScope ? 5 : 4} style={{ ...TD, fontSize: '11px', fontWeight: 'bold' }}>TOTAL ({filteredAccounts.length} accounts)</td>
+            <td style={{ ...TD, fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(listTotal) }}>{formatCurrency(listTotal)}</td>
+          </tr>
+        </tbody>
+      </table>
+      {renderSignoff()}
+    </div>
+  );
+
+  const renderStatement = () => (
+    <div className="excel-print-container">
+      {renderHeader(isAllScope ? 'BUSINESS LEDGER STATEMENT' : 'CUSTOMER KHAATA LEDGER STATEMENT', [
+        selectedAccount?.name || '',
+        <>
+          Code: {selectedAccount?.code}
+          {isAllScope && selectedAccount ? ` | Category: ${CATEGORY_LABELS[selectedAccount.category] || selectedAccount.category}` : ''}
+          {' '}| City: {selectedAccount?.city_name || 'General'}
+        </>,
+        `Period: ${fromDate ? formatDate(fromDate) : 'Start'} to ${toDate ? formatDate(toDate) : 'End'}`,
+        `Date of Print: ${formatDate(new Date())}`,
+      ])}
 
       <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
         <thead>
           <tr>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Date</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Type</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Inv #</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center' }}>Bill #</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' }}>Narration</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Pairs</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Debit (Dr)</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Credit (Cr)</th>
-            <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '130px', minWidth: '130px', whiteSpace: 'nowrap' }}>Balance</th>
+            <th style={TH}>Date</th>
+            <th style={TH}>Type</th>
+            <th style={{ ...TH, textAlign: 'center' }}>Inv #</th>
+            <th style={{ ...TH, textAlign: 'center' }}>Bill #</th>
+            <th style={TH}>Narration</th>
+            <th style={{ ...TH, textAlign: 'right' }}>Pairs</th>
+            <th style={{ ...TH, textAlign: 'right' }}>Debit (Dr)</th>
+            <th style={{ ...TH, textAlign: 'right' }}>Credit (Cr)</th>
+            <th style={{ ...TH, textAlign: 'right', width: '130px', minWidth: '130px', whiteSpace: 'nowrap' }}>Balance</th>
           </tr>
         </thead>
         <tbody>
@@ -233,11 +332,11 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
             const cellPad = row.isSubRow ? '2px 6px' : '5px 6px';
             return (
             <tr key={idx} style={{ fontWeight: row.type === 'Opening Balance' ? 'bold' : 'normal', backgroundColor: row.type === 'Opening Balance' ? '#f9f9f9' : row.isSubRow ? '#fafafa' : '#ffffff' }}>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px' }}>{row.date ? formatDate(row.date) : ''}</td>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px' }}>{row.type}</td>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{row.invNo}</td>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'center' }}>{row.billNo}</td>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', color: '#000000' }}>
+              <td style={{ ...TD, padding: cellPad, color: '#334155', fontWeight: 'bold' }}>{row.date ? formatDate(row.date) : ''}</td>
+              <td style={{ ...TD, padding: cellPad, fontWeight: 'bold', color: TYPE_COLOR[row.type] ?? '#334155' }}>{row.type}</td>
+              <td style={{ ...TD, padding: cellPad, textAlign: 'center', fontFamily: 'monospace' }}>{row.invNo}</td>
+              <td style={{ ...TD, padding: cellPad, textAlign: 'center' }}>{row.billNo}</td>
+              <td style={{ ...TD, padding: cellPad, color: '#0f172a' }}>
                 {row.chequeNo ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', lineHeight: '1.5' }}>
                     <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Cheque No:</span> {row.chequeNo}</span>
@@ -245,390 +344,109 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                   </div>
                 ) : row.narration}
               </td>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right' }}>{row.pairs > 0 ? row.pairs : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
-              <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(row.balance) }}>{row.showBalance === false ? '' : formatCurrency(row.balance)}</td>
+              <td style={{ ...TD, padding: cellPad, textAlign: 'right', color: '#475569' }}>{row.pairs > 0 ? row.pairs : '-'}</td>
+              <td style={{ ...TD, padding: cellPad, textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
+              <td style={{ ...TD, padding: cellPad, textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: '#e11d48' }}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
+              <td style={{ ...TD, padding: cellPad, textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: balanceColor(row.balance) }}>{row.showBalance === false ? '' : formatCurrency(row.balance)}</td>
             </tr>
             );
           })}
           <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
-            <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({formatCurrency(ledger?.total_credit || 0)})</td>
-            <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>{formatCurrency(runningKhaata[runningKhaata.length - 1]?.balance || 0)}</td>
+            <td colSpan={6} style={{ ...TD, fontSize: '11px', fontWeight: 'bold' }}>GRAND TOTAL</td>
+            <td style={{ ...TD, fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
+            <td style={{ ...TD, fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({formatCurrency(ledger?.total_credit || 0)})</td>
+            <td style={{ ...TD, fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>{formatCurrency(runningKhaata[runningKhaata.length - 1]?.balance || 0)}</td>
           </tr>
         </tbody>
       </table>
-
-      <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '35px', padding: '0 10px' }}>
-        <div style={{ textAlign: 'center', width: '150px' }}>
-          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
-          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Prepared By</span>
-        </div>
-        <div style={{ textAlign: 'center', width: '150px' }}>
-          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
-          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Audited By</span>
-        </div>
-        <div style={{ textAlign: 'center', width: '150px' }}>
-          <div style={{ borderBottom: '1px solid #000000', height: '30px' }}></div>
-          <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 'bold', marginTop: '5px', display: 'block' }}>Authorized Sign</span>
-        </div>
-      </div>
-
-      <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', paddingTop: '8px', borderTop: '1px solid #000000', fontSize: '9px', fontFamily: 'monospace', color: '#333333' }}>
-        <div>WENTOX FOOTWEAR DISTRIBUTION</div>
-        <div>Printed: {formatDateTime(new Date())}</div>
-      </div>
+      {renderSignoff()}
     </div>
   );
 
+  const showingStatement = accountBaId != null;
+
   return (
     <>
-      <div className="mx-auto" style={{ maxWidth: 1000 }}>
-
-        {/* 1. Accounts Directory View (When no account is selected) */}
-        {!accountBaId ? (
-          <>
-            {/* Selection Bar / Search & Date filters */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }}>
-              <div className="relative flex-1 min-w-[280px]">
-                <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Account:</span>
-                <div className="relative">
-                  <input
-                    ref={accountSearchRef}
-                    type="text"
-                    placeholder={`Search by Code, Description, Main Account${isAllScope ? ', Category' : ''} or City...`}
-                    value={accountSearch}
-                    onChange={e => setAccountSearch(e.target.value)}
-                    className="soleria-input w-full py-2 text-sm pr-10 font-semibold"
-                  />
-                  <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
-                </div>
-              </div>
-
-              {/* Date Filters */}
-              <div className="flex items-center gap-3">
-                <div>
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">From Date:</span>
-                  <input
-                    type="date"
-                    value={fromDate}
-                    onChange={e => setFromDate(e.target.value)}
-                    className="soleria-input py-1.5 text-xs"
-                  />
-                </div>
-                <div>
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">To Date:</span>
-                  <input
-                    type="date"
-                    value={toDate}
-                    onChange={e => setToDate(e.target.value)}
-                    className="soleria-input py-1.5 text-xs"
-                  />
-                </div>
-              </div>
+      <div className="mx-auto" style={{ maxWidth: 1100 }}>
+        {/* Filter Bar - data-no-print */}
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+          <div className="flex flex-wrap items-center gap-3">
+            {showingStatement && (
+              <button
+                type="button"
+                onClick={() => setAccountBaId(null)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-semibold transition-all cursor-pointer"
+              >
+                &larr; Back to list
+              </button>
+            )}
+            <div className="w-72">
+              <SearchableSelect
+                options={accountOptions}
+                value={accountBaId != null ? String(accountBaId) : ''}
+                onChange={val => setAccountBaId(val ? Number(val) : null)}
+                placeholder={isAllScope ? 'All accounts (list)' : 'All customers (list)'}
+                searchPlaceholder="Type a name..."
+              />
             </div>
-
-            {/* List directory grid of cards */}
-            <div className="mb-6">
-              <div className="flex justify-between items-center mb-4">
-                <div>
-                  <h3 className="font-lora font-semibold text-lg text-slate-800">Accounts Directory</h3>
-                  <p className="text-xs text-slate-500 font-medium">Select an account row below to view its detailed statement ledger.</p>
-                </div>
-                <div className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
-                  Total: {filteredAccounts.length} Accounts
-                </div>
-              </div>
-
-              <div className="card-white overflow-hidden border bg-white">
-                <DataListTable<typeof filteredAccounts[number]>
-                  rows={filteredAccounts}
-                  rowKey={c => c.ba_id}
-                  onRowClick={c => setAccountBaId(c.ba_id)}
-                  emptyMessage="No accounts found matching your search."
-                  columns={[
-                    {
-                      key: 'code',
-                      header: 'Code',
-                      width: '130px',
-                      render: c => (
-                        <span className="font-mono font-semibold text-slate-600 text-xs">{c.code}</span>
-                      ),
-                    },
-                    {
-                      key: 'name',
-                      header: 'Account Name',
-                      render: c => <span className="font-semibold text-slate-900">{c.name}</span>,
-                    },
-                    {
-                      key: 'main_account',
-                      header: 'Main Account',
-                      render: c => (
-                        <span className="text-[11px] text-slate-500 font-medium uppercase tracking-wider">
-                          {c.main_account}
-                        </span>
-                      ),
-                    },
-                    ...(isAllScope ? [{
-                      key: 'category',
-                      header: 'Category',
-                      width: '140px',
-                      render: (c: typeof filteredAccounts[number]) => (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-300">
-                          {CATEGORY_LABELS[c.category] || c.category}
-                        </span>
-                      ),
-                    }] : []),
-                    {
-                      key: 'city',
-                      header: 'City',
-                      width: '150px',
-                      render: c => (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/50 uppercase tracking-wider">
-                          {c.city_name || 'General'}
-                        </span>
-                      ),
-                    },
-                    {
-                      // businessLedger({view:'summary'}) has always returned closing_balance on every
-                      // row; the directory just never showed it, so reading a bank or cash balance
-                      // meant opening the statement one account at a time. Dr/Cr rather than
-                      // Receivable/Payable because this list mixes customers, vendors, employees,
-                      // banks and expense heads — the statement's own columns already say Dr/Cr.
-                      key: 'balance',
-                      header: 'Balance',
-                      width: '160px',
-                      align: 'right',
-                      render: c => (
-                        <span
-                          className="text-xs font-mono font-bold"
-                          style={{ color: balanceColor(c.closing_balance) }}
-                        >
-                          {formatCurrency(c.closing_balance)}
-                        </span>
-                      ),
-                    },
-                    {
-                      key: 'statement',
-                      header: '',
-                      width: '140px',
-                      align: 'right',
-                      render: () => (
-                        <span className="text-xs font-semibold text-[var(--brand-gold)]">
-                          View Statement &rarr;
-                        </span>
-                      ),
-                    },
-                  ]}
+            {!showingStatement && (
+              <div className="relative min-w-[220px]">
+                <input
+                  type="text"
+                  placeholder={`Search code, name, main account${isAllScope ? ', category' : ''} or city...`}
+                  value={accountSearch}
+                  onChange={e => setAccountSearch(e.target.value)}
+                  className="soleria-input w-full py-1.5 text-xs pr-9 font-semibold"
                 />
+                <Search className="absolute right-3 top-2 text-slate-400" size={14} />
               </div>
+            )}
+            {showingStatement && (
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
+                <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 px-3 text-xs font-semibold" />
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-500 uppercase">{showingStatement ? 'To:' : 'As on:'}</label>
+              <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 px-3 text-xs font-semibold" />
             </div>
-          </>
-        ) : (
-          /* 2. Specific Account Statement Ledger View */
-          <div className={`transition-all duration-200 ${isClosing ? 'opacity-0 translate-y-2 scale-98' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
-            {/* Navigation & Action Card */}
-            <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-6 shadow-2xs">
-              {/* ROW 1: Back Button & Account Name (Left), Opening Balance (Right) */}
-              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-3 mb-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <button
-                    onClick={handleCloseDetail}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer shadow-2xs hover:shadow-xs"
-                  >
-                    &larr; Back to Accounts Directory
-                  </button>
-                  <div className="text-sm font-semibold text-slate-700">
-                    Viewing Ledger: <span className="font-lora font-bold text-slate-900 text-base ml-1">{selectedAccount?.name}</span>
-                    {isAllScope && selectedAccount && (
-                      <span className="ml-2 text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider bg-slate-100 text-slate-700 border-slate-300 align-middle">
-                        {CATEGORY_LABELS[selectedAccount.category] || selectedAccount.category}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Opening Balance:</span>
-                  <span className="font-bold font-mono text-sm" style={{ color: balanceColor(runningKhaata[0]?.balance || 0) }}>
-                    {formatCurrency(runningKhaata[0]?.balance || 0)}
-                  </span>
-                </div>
-              </div>
-
-              {/* BL-01: switch directly to another account's ledger without leaving this view. */}
-              <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
-                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider shrink-0 flex items-center gap-1">
-                  <Search size={13} className="text-slate-400" /> Switch Account:
-                </span>
-                <div className="w-full max-w-sm">
-                  <SearchableSelect
-                    options={switcherOptions}
-                    value={accountBaId != null ? String(accountBaId) : ''}
-                    onChange={val => setAccountBaId(Number(val))}
-                    placeholder="Search accounts..."
-                    searchPlaceholder="Type a name..."
-                  />
-                </div>
-              </div>
-
-              {/* ROW 2: Date Filters (Left), Print & Export Buttons (Right) */}
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-                    <input
-                      type="date"
-                      value={fromDate}
-                      onChange={e => setFromDate(e.target.value)}
-                      className="soleria-input py-1.5 px-3 text-xs font-semibold"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-                    <input
-                      type="date"
-                      value={toDate}
-                      onChange={e => setToDate(e.target.value)}
-                      className="soleria-input py-1.5 px-3 text-xs font-semibold"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleShowPrintPreview}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
-                  >
-                    <Eye size={15} /> Show Print Preview
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* On-screen Statement Sheet */}
-            <div className="card-white p-6 md:p-8 bg-white border">
-
-              {/* Header details */}
-              <div className="flex items-center justify-between border-b pb-4 mb-6">
-                <div>
-                  <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
-                  <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Business Accounts Ledger</p>
-                </div>
-                <div className="text-right">
-                  <h2 className="font-lora font-semibold text-lg uppercase">Account Statement (Khaata)</h2>
-                  <div className="text-sm font-semibold text-slate-700 mt-1">{selectedAccount?.name}</div>
-                  <div className="text-xs text-slate-500 font-medium">
-                    Account ID: {selectedAccount?.code} | City: {selectedAccount?.city_name || 'General'}
-                  </div>
-                  {(fromDate || toDate) && (
-                    <div className="text-xs text-amber-700 font-semibold mt-0.5">
-                      Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                      <th className="p-3 pl-4">Date</th>
-                      <th className="p-3">Type</th>
-                      <th className="p-3 text-center">Inv #</th>
-                      <th className="p-3 text-center">Bill #</th>
-                      <th className="p-3" style={{ minWidth: '160px' }}>Narration</th>
-                      <th className="p-3 text-center">Pairs</th>
-                      <th className="p-3 text-right">Debit (Dr)</th>
-                      <th className="p-3 text-right">Credit (Cr)</th>
-                      <th className="p-3 text-right whitespace-nowrap" style={{ minWidth: '110px' }}>Balance</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {loading ? (
-                      <tr><td colSpan={9} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                    ) : runningKhaata.length === 1 && runningKhaata[0].balance === 0 && runningKhaata[0].debit === 0 && runningKhaata[0].credit === 0 ? (
-                      <tr>
-                        <td colSpan={9} className="text-center p-8 text-slate-400">
-                          No ledger entries found matching selection or date range.
-                        </td>
-                      </tr>
-                    ) : (
-                      runningKhaata.map((row, idx) => {
-                        const displayBal = row.balance;
-                        const isRed = row.credit > 0;
-                        const cellV = row.isSubRow ? 'py-1' : 'py-3';
-
-                        return (
-                          <tr
-                            key={idx}
-                            className={`border-b ${row.type === 'Opening Balance' ? 'bg-slate-50 font-medium text-slate-700' : row.isSubRow ? 'bg-slate-50/40' : isRed ? 'text-rose-700 hover:bg-rose-50/30' : 'text-slate-700 hover:bg-slate-50/30'}`}
-                            style={{ borderColor: 'var(--border-table)' }}
-                          >
-                            <td className={`px-3 pl-4 font-semibold ${cellV}`}>{row.date ? formatDate(row.date) : ''}</td>
-                            <td className={`px-3 ${cellV}`}>
-                              {row.type && (
-                                <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded font-bold ${row.type === 'Sale Bill' ? 'bg-rose-50 text-rose-700' : row.type === 'Receipt (Jamma)' ? 'bg-emerald-50 text-emerald-700' : row.type === 'Sale Return' ? 'bg-blue-50 text-blue-700' : row.type === 'Commission' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
-                                  {row.type}
-                                </span>
-                              )}
-                            </td>
-                            <td className={`px-3 text-center font-mono text-xs ${cellV}`}>{row.invNo}</td>
-                            <td className={`px-3 text-center font-medium ${cellV}`}>{row.billNo}</td>
-                            <td className={`px-3 text-xs font-medium text-slate-900 ${cellV}`}>
-                              {row.chequeNo ? (
-                                <div className="flex flex-col gap-0.5">
-                                  <span><span className="text-slate-400">Cheque No:</span> {row.chequeNo}</span>
-                                  <span><span className="text-slate-400">Date on Cheque:</span> {row.chequeDate ? formatDate(row.chequeDate) : '-'}</span>
-                                </div>
-                              ) : (
-                                row.narration
-                              )}
-                            </td>
-                            <td className={`px-3 text-center text-slate-600 font-medium ${cellV}`}>{row.pairs > 0 ? row.pairs : '-'}</td>
-                            <td className={`px-3 text-right text-emerald-700 font-bold ${cellV}`}>
-                              {row.debit > 0 ? formatCurrency(row.debit) : '-'}
-                            </td>
-                            <td className={`px-3 text-right text-rose-700 font-bold ${cellV}`}>
-                              {row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}
-                            </td>
-                            <td className={`px-3 text-right font-bold font-mono whitespace-nowrap ${cellV}`} style={{ color: balanceColor(row.balance) }}>
-                              {row.showBalance === false ? '' : formatCurrency(displayBal)}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                      <td colSpan={6} className="p-4 text-left font-lora">TOTAL</td>
-                      <td className="p-4 text-right text-emerald-800">{formatCurrency(ledger?.total_debit || 0)}</td>
-                      <td className="p-4 text-right text-rose-800">({formatCurrency(ledger?.total_credit || 0)})</td>
-                      <td className="p-4 text-right" style={{ color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>
-                        {formatCurrency(runningKhaata[runningKhaata.length - 1]?.balance || 0)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </div>
+            {!showingStatement && <SkipZeroToggle value={skipZero} onChange={setSkipZero} />}
           </div>
+          <button
+            onClick={handleShowPrintPreview}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+          >
+            <Eye size={14} /> Show Print Preview
+          </button>
+        </div>
+
+        {showingStatement ? (
+          <LiveReportDocument loading={!loadedLedger || !directory}>
+            {renderStatement()}
+          </LiveReportDocument>
+        ) : (
+          <>
+            {!IS_PREVIEW_WINDOW && directory && filteredAccounts.length > 0 && (
+              <p className="text-xs text-slate-500 mb-2" data-no-print>Click an account to open its statement.</p>
+            )}
+            <LiveReportDocument loading={!directory}>
+              {renderAccountsList(true)}
+            </LiveReportDocument>
+          </>
         )}
       </div>
 
-      {/* Print Preview Modal — uses the real backend-computed ledger, not a client-side recompute */}
       <ReportPrintPreviewModal
         isOpen={isPreviewOpen}
-        onClose={() => setIsPreviewOpen(false)}
-        title={`${isAllScope ? 'Business Ledger' : 'Customer Khaata Ledger'} - ${selectedAccount?.name || ''}`}
-        orientation="landscape"
+        onClose={closePreview}
+        title={showingStatement
+          ? `${isAllScope ? 'Business Ledger' : 'Customer Khaata Ledger'} - ${selectedAccount?.name || ''}`
+          : `${isAllScope ? 'Business' : 'Customer'} Accounts List - Print Preview`}
+        orientation={showingStatement ? 'landscape' : 'portrait'}
         onExportExcel={handleExportExcel}
       >
-        {renderPrintableReport()}
+        {showingStatement ? renderStatement() : renderAccountsList(false)}
       </ReportPrintPreviewModal>
     </>
   );

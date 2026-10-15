@@ -1,74 +1,99 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { Fragment, useState, useMemo, useEffect } from 'react';
+import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, Eye } from 'lucide-react';
 import SearchableSelect from '@/components/SearchableSelect';
+import { Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { VendorReportRow, VendorRow, LedgerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
-import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { IS_PREVIEW_WINDOW, closePreviewWindow } from '@/components/reports/previewWindow';
+import LiveReportDocument from '@/components/reports/LiveReportDocument';
+import { REPORT_COLORS, signedColor } from '@/components/reports/reportColors';
+import { getWindowParam } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
+
+
+type Loaded = { key: string; groupRows: VendorReportRow[]; ledger: { opening_balance: number; rows: LedgerRow[] } | null; error: string | null };
 
 export function VendorReportContent() {
-  const [selectedVendorId, setSelectedVendorId] = useState<number | null>(() => { const p = getWindowParam('selectedVendorId'); return p != null ? Number(p) : null; });
-  const [vendorSearch, setVendorSearch] = useState(() => getWindowParam('vendorSearch') || '');
-  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
-  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
-
-  // G-03 (changes-14-09-26.md): the cursor lands in the vendor search box whenever the grouped-
-  // list view is showing — on first open, and again on returning to it from a drill-down.
-  const vendorSearchRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (!selectedVendorId) requestAnimationFrame(() => vendorSearchRef.current?.focus());
-  }, [selectedVendorId]);
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
+  // Product Ledger layout (per the user, 2026-10-14): filter bar on top, the printed document under
+  // it. Vendor "all" = summary of every vendor; a vendor picked = that vendor's ledger statement.
+  // Every visit starts fresh (all vendors, Skip Zero off, last 3 months -> today), per the user.
+  const [vendorFilter, setVendorFilter] = useState(() => getWindowParam('vendor') || 'all');
+  const [skipZero, setSkipZero] = useState(() => getWindowParam('skipZero') === '1');
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') ?? getThreeMonthsAgoDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') ?? getTodayDate());
 
   const [vendors, setVendors] = useState<VendorRow[]>([]);
-  const [vendorGroupRows, setVendorGroupRows] = useState<VendorReportRow[]>([]);
-  const [ledger, setLedger] = useState<{ opening_balance: number; rows: LedgerRow[] } | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  useEffect(() => { api.listVendors().then(r => { if (r.ok) setVendors(r.data); }); }, []);
+  useEffect(() => { api.listVendors().then(r => { if (r.ok) setVendors(r.data); }); }, [dataVersion]);
 
-  const loadGrouped = useCallback(async () => {
-    setLoading(true);
-    const res = await api.reports.vendorReport({ date_from: fromDate || undefined, date_to: toDate || undefined });
-    if (res.ok) setVendorGroupRows(res.data);
-    setLoading(false);
-  }, [fromDate, toDate]);
+  const selectedVendorId = vendorFilter !== 'all' ? Number(vendorFilter) : null;
 
-  useEffect(() => { if (!selectedVendorId) loadGrouped(); }, [selectedVendorId, loadGrouped]);
+  // What's on screen belongs to one set of filters (`key`); until the data for the current filters
+  // arrives, the previous document stays up — no flash of an empty sheet while typing a date.
+  const loadKey = `${vendorFilter}|${fromDate}|${toDate}`;
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  useEffect(() => {
+    const range = { date_from: fromDate || undefined, date_to: toDate || undefined };
+    const request = selectedVendorId != null
+      ? api.reports.vendorLedger({ vendor_id: selectedVendorId, ...range }).then(res => (res.ok
+        ? { groupRows: [], ledger: res.data, error: null }
+        : { groupRows: [], ledger: null, error: res.error.message }))
+      : api.reports.vendorReport(range).then(res => (res.ok
+        ? { groupRows: res.data, ledger: null, error: null }
+        : { groupRows: [], ledger: null, error: res.error.message }));
+    let cancelled = false;
+    request.then(data => {
+      if (cancelled) return;
+      setLoaded({ key: loadKey, ...data });
+      if (IS_PREVIEW_WINDOW && !data.error) setIsPreviewOpen(true);
+    });
+    return () => { cancelled = true; };
+  }, [loadKey, selectedVendorId, fromDate, toDate, dataVersion]);
 
-  const filteredGroupRows = useMemo(() => {
-    if (!vendorSearch.trim()) return vendorGroupRows;
-    const q = vendorSearch.toLowerCase();
-    return vendorGroupRows.filter(r => r.vendor_name.toLowerCase().includes(q));
-  }, [vendorGroupRows, vendorSearch]);
+  const vendorGroupRows = useMemo(() => loaded?.groupRows ?? [], [loaded]);
+  const ledger = loaded?.ledger ?? null;
+  // The document shows what was LOADED, which can still be the previous vendor choice for a moment.
+  const loadedVendor = loaded ? loaded.key.split('|')[0] : vendorFilter;
+  const docVendorId = loadedVendor !== 'all' ? Number(loadedVendor) : null;
+  const docVendor = useMemo(() => vendors.find(v => v.vendor_id === docVendorId), [docVendorId, vendors]);
+
+  const handleShowPrintPreview = () => {
+    api.openWindow('reports', 'vendor', {
+      vendor: vendorFilter, fromDate, toDate, skipZero: skipZero ? '1' : '0', autoPreview: '1',
+    });
+  };
+
+  const closePreview = () => {
+    setIsPreviewOpen(false);
+    closePreviewWindow();
+  };
+
+  const filteredGroupRows = useMemo(
+    () => vendorGroupRows.filter(r => !(skipZero && isZeroBalance(r.balance))),
+    [vendorGroupRows, skipZero],
+  );
 
   const grandTotals = useMemo(() => {
     return filteredGroupRows.reduce((acc, r) => ({
       totalPurchase: acc.totalPurchase + r.total_purchase,
       purchaseReturn: acc.purchaseReturn + r.total_return,
       netPurchase: acc.netPurchase + r.net_purchase,
-      paymentPaid: acc.paymentPaid + r.payment_paid
-    }), { totalPurchase: 0, purchaseReturn: 0, netPurchase: 0, paymentPaid: 0 });
+      paymentPaid: acc.paymentPaid + r.payment_paid,
+      balance: acc.balance + r.balance
+    }), { totalPurchase: 0, purchaseReturn: 0, netPurchase: 0, paymentPaid: 0, balance: 0 });
   }, [filteredGroupRows]);
 
-  const selectedVendor = useMemo(() => vendors.find(v => v.vendor_id === selectedVendorId), [selectedVendorId, vendors]);
-
-  const loadLedger = useCallback(async () => {
-    if (!selectedVendorId) return;
-    setLoading(true);
-    const res = await api.reports.vendorLedger({ vendor_id: selectedVendorId, date_from: fromDate || undefined, date_to: toDate || undefined });
-    if (res.ok) setLedger(res.data); else setLedger(null);
-    setLoading(false);
-  }, [selectedVendorId, fromDate, toDate]);
-
-  useEffect(() => { if (selectedVendorId) loadLedger(); }, [selectedVendorId, loadLedger]);
-
-  // Opening Balance synthetic row + running balance, same layout as before — the backend already
-  // computes opening_balance and each row's own running balance, no client-side math needed.
+  // Opening Balance synthetic row + running balance — the backend already computes
+  // opening_balance and each row's own running balance, no client-side math needed.
   const runningVendorLedger = useMemo(() => {
     if (!ledger) return [];
     return [
@@ -78,34 +103,16 @@ export function VendorReportContent() {
   }, [ledger, fromDate]);
 
   const handleExportGroupedExcel = () => {
-    const headers = ['Vendor / Supplier', 'Total Purchase', 'Purchase Return', 'Net Purchase', 'Payment Paid'];
-    const rows = filteredGroupRows.map(r => [r.vendor_name, r.total_purchase, r.total_return, r.net_purchase, r.payment_paid]);
+    const headers = ['Vendor / Supplier', 'Total Purchase', 'Purchase Return', 'Net Purchase', 'Payment Paid', 'Balance'];
+    const rows = filteredGroupRows.map(r => [r.vendor_name, r.total_purchase, r.total_return, r.net_purchase, r.payment_paid, r.balance]);
     exportRowsToExcel('vendor-report-grouped', headers, rows);
   };
 
   const handleExportLedgerExcel = () => {
     const headers = ['Date', 'Type', 'Ref', 'Debit', 'Credit', 'Balance'];
     const rows = runningVendorLedger.map(r => [formatDate(r.date), r.type, r.ref, r.debit, r.credit, r.balance]);
-    exportRowsToExcel(`vendor-ledger-${selectedVendor?.name || 'export'}`, headers, rows);
+    exportRowsToExcel(`vendor-ledger-${docVendor?.name || 'export'}`, headers, rows);
   };
-
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-
-  // "Show Print Preview" opens a new window on this same view (per the user, 2026-09-03), instead
-  // of an in-page overlay — carries the drill-down vendor too, so the new window lands straight on
-  // that vendor's ledger rather than the grouped summary.
-  const handleShowPrintPreview = () => {
-    const params: Record<string, string> = { vendorSearch, fromDate, toDate, autoPreview: '1' };
-    if (selectedVendorId != null) params.selectedVendorId = String(selectedVendorId);
-    api.openWindow('reports', 'vendor', params);
-  };
-
-  // Opened via another window's "Show Print Preview" — go straight into the preview once the
-  // relevant data (grouped rows, or the drilled-into vendor's ledger) has actually loaded.
-  useEffect(() => {
-    if (!isChildWindow() || getWindowParam('autoPreview') !== '1') return;
-    if (selectedVendorId != null ? ledger : vendorGroupRows.length > 0) setIsPreviewOpen(true);
-  }, [selectedVendorId, ledger, vendorGroupRows]);
 
   const renderPrintableDocument = () => {
     return (
@@ -116,7 +123,7 @@ export function VendorReportContent() {
           </div>
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', letterSpacing: '0.5px' }}>
-              {selectedVendorId ? `VENDOR LEDGER STATEMENT — ${selectedVendor?.name?.toUpperCase()}` : 'VENDOR REPORT — GROUPED SUMMARY'}
+              {docVendorId ? `VENDOR LEDGER STATEMENT — ${docVendor?.name?.toUpperCase()}` : 'VENDOR REPORT — GROUPED SUMMARY'}
             </h2>
             <p style={{ margin: '6px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
               Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}
@@ -127,7 +134,7 @@ export function VendorReportContent() {
           </div>
         </div>
 
-        {!selectedVendorId ? (
+        {!docVendorId ? (
           <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
             <thead>
               <tr>
@@ -136,24 +143,38 @@ export function VendorReportContent() {
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Purchase Return</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Net Purchase</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Payment Paid</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right' }}>Balance</th>
               </tr>
             </thead>
             <tbody>
               {filteredGroupRows.map(row => (
-                <tr key={row.vendor_id}>
+                <Fragment key={row.vendor_id}>
+                <tr>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{row.vendor_name}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.total_purchase > 0 ? formatCurrency(row.total_purchase) : '-'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.total_return > 0 ? formatCurrency(row.total_return) : '-'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.net_purchase)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{row.payment_paid > 0 ? formatCurrency(row.payment_paid) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: REPORT_COLORS.text }}>{row.total_purchase > 0 ? formatCurrency(row.total_purchase) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{row.total_return > 0 ? formatCurrency(row.total_return) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: REPORT_COLORS.gold }}>{formatCurrency(row.net_purchase)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{row.payment_paid > 0 ? formatCurrency(row.payment_paid) : '-'}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: signedColor(row.balance) }}>{formatCurrency(row.balance)}</td>
                 </tr>
+                {/* A Journal Voucher gets its own row under the vendor rather than a column: it
+                    reduces what is owed but is not a payment, and most vendors have none. */}
+                {row.total_jv !== 0 && (
+                  <tr>
+                    <td colSpan={4} style={{ border: '1px solid #000000', padding: '3px 6px 3px 20px', fontSize: '10px', fontStyle: 'italic' }}>Journal Voucher applied</td>
+                    <td style={{ border: '1px solid #000000', padding: '3px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(Math.abs(row.total_jv))}</td>
+                    <td style={{ border: '1px solid #000000', padding: '3px 6px' }} />
+                  </tr>
+                )}
+                </Fragment>
               ))}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
                 <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.totalPurchase)}</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.purchaseReturn)}</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.netPurchase)}</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(grandTotals.paymentPaid)}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.text }}>{formatCurrency(grandTotals.totalPurchase)}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(grandTotals.purchaseReturn)}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.gold }}>{formatCurrency(grandTotals.netPurchase)}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(grandTotals.paymentPaid)}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: signedColor(grandTotals.balance) }}>{formatCurrency(grandTotals.balance)}</td>
               </tr>
             </tbody>
           </table>
@@ -177,7 +198,7 @@ export function VendorReportContent() {
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{row.ref}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(row.balance)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: balanceColor(row.balance) }}>{formatCurrency(row.balance)}</td>
                 </tr>
               ))}
             </tbody>
@@ -207,246 +228,61 @@ export function VendorReportContent() {
     );
   };
 
+  const preview = (
+    <ReportPrintPreviewModal
+      isOpen={isPreviewOpen}
+      onClose={closePreview}
+      title={docVendorId ? `Vendor Ledger - ${docVendor?.name}` : 'Vendor Report - Print Preview'}
+      orientation="portrait"
+      onExportExcel={docVendorId ? handleExportLedgerExcel : handleExportGroupedExcel}
+    >
+      {renderPrintableDocument()}
+    </ReportPrintPreviewModal>
+  );
+
   return (
-      <div className="mx-auto" style={{ maxWidth: 1150 }}>
-
-        {!selectedVendorId ? (
-          <>
-            {/* Filter Bar - data-no-print */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-              <div className="flex flex-wrap items-center gap-4 flex-1 min-w-[280px]">
-                <div className="relative flex-1 min-w-[220px]">
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Vendor:</span>
-                  <div className="relative">
-                    <input
-                      ref={vendorSearchRef}
-                      type="text"
-                      placeholder="Search by vendor name..."
-                      value={vendorSearch}
-                      onChange={e => setVendorSearch(e.target.value)}
-                      className="soleria-input w-full py-2 text-sm pr-10 font-semibold"
-                    />
-                    <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-                  <input type="date"
-            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
-                </div>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-                  <input type="date"
-            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleShowPrintPreview}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
-                >
-                  <Eye size={14} /> Show Print Preview
-                </button>
-              </div>
-            </div>
-
-            {/* Grouped Report Sheet */}
-            <div className="card-white p-6 md:p-8 bg-white border">
-              <div className="flex items-center justify-between border-b pb-4 mb-6">
-                <div>
-                  <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
-                  <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Footwear Distribution</p>
-                </div>
-                <div className="text-right">
-                  <h2 className="font-lora font-semibold text-lg uppercase">Vendor Report — Grouped Summary</h2>
-                  {(fromDate || toDate) && (
-                    <p className="text-xs text-amber-700 font-semibold mt-0.5">Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}</p>
-                  )}
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                      <th className="p-3 pl-4">Vendor / Supplier</th>
-                      <th className="p-3 text-right">Total Purchase</th>
-                      <th className="p-3 text-right">Purchase Return</th>
-                      <th className="p-3 text-right">Net Purchase</th>
-                      <th className="p-3 text-right">Payment Paid</th>
-                      <th className="p-3 text-center">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {loading ? (
-                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                    ) : filteredGroupRows.length === 0 ? (
-                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">No vendors found matching your search.</td></tr>
-                    ) : (
-                      filteredGroupRows.flatMap(row => [
-                        <tr key={row.vendor_id} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-3 pl-4 font-semibold text-slate-800">{row.vendor_name}</td>
-                          <td className="p-3 text-right font-bold text-slate-800">{row.total_purchase > 0 ? formatCurrency(row.total_purchase) : '-'}</td>
-                          <td className="p-3 text-right font-bold text-blue-700">{row.total_return > 0 ? formatCurrency(row.total_return) : '-'}</td>
-                          <td className="p-3 text-right font-bold" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(row.net_purchase)}</td>
-                          <td className="p-3 text-right font-bold text-emerald-700">{row.payment_paid > 0 ? formatCurrency(row.payment_paid) : '-'}</td>
-                          <td className="p-3 text-center">
-                            <button
-                              onClick={() => setSelectedVendorId(row.vendor_id)}
-                              className="text-xs font-semibold text-blue-600 hover:text-blue-800 underline"
-                            >
-                              View Ledger
-                            </button>
-                          </td>
-                        </tr>,
-                        // A Journal Voucher gets its OWN row under the vendor rather than a column:
-                        // it reduces what is owed but is not a payment, and most vendors have none,
-                        // so a column would be mostly dashes across the whole report.
-                        row.total_jv !== 0 ? (
-                          <tr key={`jv-${row.vendor_id}`} className="border-b bg-amber-50/40" style={{ borderColor: 'var(--border-table)' }}>
-                            <td className="p-2 pl-8 text-xs font-semibold text-amber-900" colSpan={4}>
-                              Journal Voucher applied
-                            </td>
-                            <td className="p-2 text-right text-xs font-bold font-mono text-amber-900">
-                              {formatCurrency(Math.abs(row.total_jv))}
-                            </td>
-                            <td />
-                          </tr>
-                        ) : null,
-                      ])
-                    )}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                      <td className="p-4 pl-4 text-left font-lora">GRAND TOTAL</td>
-                      <td className="p-4 text-right text-slate-800">{formatCurrency(grandTotals.totalPurchase)}</td>
-                      <td className="p-4 text-right text-blue-800">{formatCurrency(grandTotals.purchaseReturn)}</td>
-                      <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(grandTotals.netPurchase)}</td>
-                      <td className="p-4 text-right text-emerald-800">{formatCurrency(grandTotals.paymentPaid)}</td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </div>
-          </>
-        ) : (
-          <>
-            {/* Per-Vendor Ledger */}
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setSelectedVendorId(null)}
-                  className="btn-outline flex items-center gap-1.5 px-4 py-2 text-sm font-semibold"
-                >
-                  &larr; Back to Vendor Report
-                </button>
-                <div className="text-sm font-semibold text-slate-600">
-                  Viewing Ledger: <span className="text-amber-800 font-bold">{selectedVendor?.name}</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-3">
-                  <div>
-                    <span className="block text-xs font-semibold text-slate-500 uppercase mb-0.5">From:</span>
-                    <input type="date"
-            value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1 text-xs" />
-                  </div>
-                  <div>
-                    <span className="block text-xs font-semibold text-slate-500 uppercase mb-0.5">To:</span>
-                    <input type="date"
-            value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1 text-xs" />
-                  </div>
-                </div>
-                <button
-                  onClick={handleShowPrintPreview}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs self-end h-9 mt-4"
-                >
-                  <Eye size={14} /> Show Print Preview
-                </button>
-              </div>
-            </div>
-
-            {/* Switch directly to another vendor's ledger without leaving this view (per the
-                user, 2026-09-04) — same "Switch Account" pattern as ReportKhaataPage.tsx's own
-                ledger detail view. */}
-            <div className="flex items-center gap-2 mb-6" data-no-print>
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider shrink-0 flex items-center gap-1">
-                <Search size={13} className="text-slate-400" /> Switch Vendor:
-              </span>
-              <div className="w-full max-w-sm">
-                <SearchableSelect
-                  options={vendors.map(v => ({ value: String(v.vendor_id), label: v.name }))}
-                  value={selectedVendorId != null ? String(selectedVendorId) : ''}
-                  onChange={(val: string) => setSelectedVendorId(Number(val))}
-                  placeholder="Search vendors..."
-                  searchPlaceholder="Type to search..."
-                />
-              </div>
-            </div>
-
-            <div className="card-white p-6 md:p-8 bg-white border">
-              <div className="flex items-center justify-between border-b pb-4 mb-6">
-                <div>
-                  <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
-                  <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Vendor Ledger</p>
-                </div>
-                <div className="text-right">
-                  <h2 className="font-lora font-semibold text-lg uppercase">Vendor Statement</h2>
-                  <div className="text-sm font-semibold text-slate-700 mt-1">{selectedVendor?.name}</div>
-                  <div className="text-[10px] font-semibold uppercase text-slate-500">Opening Balance</div>
-                  <div className="font-bold font-mono text-sm" style={{ color: 'var(--brand-gold)' }}>
-                    {formatCurrency(ledger?.opening_balance || 0)}
-                  </div>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                      <th className="p-3 pl-4">Date</th>
-                      <th className="p-3">Type</th>
-                      <th className="p-3 text-center">Ref #</th>
-                      <th className="p-3 text-right">Debit (IN)</th>
-                      <th className="p-3 text-right">Credit (OUT)</th>
-                      <th className="p-3 text-right whitespace-nowrap" style={{ minWidth: '110px' }}>Balance</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {loading ? (
-                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                    ) : runningVendorLedger.length === 0 ? (
-                      <tr><td colSpan={6} className="text-center p-8 text-slate-400">No transactions found for this period.</td></tr>
-                    ) : (
-                      runningVendorLedger.map((row, idx) => (
-                        <tr key={idx} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                          <td className="p-3 pl-4 text-slate-700 font-semibold">{formatDate(row.date)}</td>
-                          <td className="p-3 font-semibold text-slate-800">{row.type}</td>
-                          <td className="p-3 text-center font-mono text-xs">{row.ref}</td>
-                          <td className="p-3 text-right font-bold text-emerald-700">{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                          <td className="p-3 text-right font-bold text-rose-700">{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
-                          <td className="p-3 text-right font-bold" style={{ color: balanceColor(row.balance) }}>{formatCurrency(row.balance)}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>
-        )}
-
-        <ReportPrintPreviewModal
-          isOpen={isPreviewOpen}
-          onClose={() => setIsPreviewOpen(false)}
-          title={selectedVendorId ? `Vendor Ledger - ${selectedVendor?.name}` : 'Vendor Report - Print Preview'}
-          orientation="portrait"
-          onExportExcel={selectedVendorId ? handleExportLedgerExcel : handleExportGroupedExcel}
+    <div className="mx-auto" style={{ maxWidth: 1100 }}>
+      {/* Filter Bar - data-no-print */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="w-64">
+            <SearchableSelect
+              options={[
+                { value: 'all', label: 'All vendors (summary)' },
+                ...vendors.map(v => ({ value: String(v.vendor_id), label: v.name })),
+              ]}
+              value={vendorFilter}
+              onChange={setVendorFilter}
+              placeholder="All vendors (summary)"
+              searchPlaceholder="Type a vendor name..."
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
+            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
+            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+          </div>
+          {vendorFilter === 'all' && <SkipZeroToggle value={skipZero} onChange={setSkipZero} />}
+        </div>
+        <button
+          onClick={handleShowPrintPreview}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
         >
-          {renderPrintableDocument()}
-        </ReportPrintPreviewModal>
+          <Eye size={14} /> Show Print Preview
+        </button>
       </div>
+
+      {loaded?.error && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{loaded.error}</div>}
+
+      <LiveReportDocument loading={!loaded}>
+        {renderPrintableDocument()}
+      </LiveReportDocument>
+
+      {preview}
+    </div>
   );
 }
 

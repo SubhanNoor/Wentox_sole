@@ -4,12 +4,16 @@ import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
-import { formatDate, formatDateTime } from '@/lib/utils';
+import { formatDate, formatDateTime, getTodayDate, getMonthStartDate } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { CashBookResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { closePreviewWindow } from '@/components/reports/previewWindow';
+import LiveReportDocument from '@/components/reports/LiveReportDocument';
+import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -30,7 +34,12 @@ function summaryLines(result: CashBookResult): [string, number, boolean][] {
 }
 
 export function ReportCashBookContent() {
-  const [filterBy, setFilterBy] = useState<'date' | 'month'>(() => (getWindowParam('filterBy') as 'date' | 'month') || 'date');
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
+  // By Date / By Month / Between Two Dates (the third mode per the user, 2026-10-15).
+  const [filterBy, setFilterBy] = useState<'date' | 'month' | 'range'>(() => (getWindowParam('filterBy') as 'date' | 'month' | 'range') || 'date');
+  const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getMonthStartDate());
+  const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [searchQuery, setSearchQuery] = useState(() => getWindowParam('searchQuery') || '');
   const [specificDate, setSpecificDate] = useState(() => getWindowParam('specificDate') || new Date().toISOString().split('T')[0]);
   const [filterMonth, setFilterMonth] = useState<number>(() => { const p = getWindowParam('filterMonth'); return p != null ? Number(p) : new Date().getMonth(); });
@@ -53,7 +62,9 @@ export function ReportCashBookContent() {
   // formatDate, not the raw value: specificDate is the ISO string the <input type="date"> holds,
   // so the printed header read "Period: 2026-08-31" while every other date on the page is
   // dd/mm/yyyy.
-  const periodLabel = filterBy === 'date' ? formatDate(specificDate) : `${MONTHS[filterMonth]} ${filterYear}`;
+  const periodLabel = filterBy === 'date' ? formatDate(specificDate)
+    : filterBy === 'range' ? `${formatDate(fromDate)} to ${formatDate(toDate)}`
+    : `${MONTHS[filterMonth]} ${filterYear}`;
 
   // Computed from the server's own totals, not the filtered view: a search box narrowing the rows
   // must not make a balanced book look broken.
@@ -79,20 +90,25 @@ export function ReportCashBookContent() {
     setLoading(true);
     const payload = filterBy === 'date'
       ? { date: specificDate }
-      : { month: `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}` };
+      : filterBy === 'range'
+        ? { date_from: fromDate, date_to: toDate }
+        : { month: `${filterYear}-${String(filterMonth + 1).padStart(2, '0')}` };
+    // A half-typed or reversed range: keep showing the last book rather than asking for nonsense.
+    if (filterBy === 'range' && (!fromDate || !toDate || fromDate > toDate)) { setLoading(false); return; }
     const res = await api.reports.cashBook(payload);
     if (res.ok) setResult(res.data);
     setLoading(false);
     setHasLoadedOnce(true);
-  }, [filterBy, specificDate, filterMonth, filterYear]);
+  }, [filterBy, specificDate, filterMonth, filterYear, fromDate, toDate]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, dataVersion]);
 
   // "Show Print Preview" opens a new window landing on this same filtered report (per the user,
   // 2026-09-03), instead of an in-page overlay.
   const handleShowPrintPreview = () => {
     const params: Record<string, string> = { filterBy, searchQuery, autoPreview: '1' };
     if (filterBy === 'date') params.specificDate = specificDate;
+    else if (filterBy === 'range') { params.fromDate = fromDate; params.toDate = toDate; }
     else { params.filterMonth = String(filterMonth); params.filterYear = String(filterYear); }
     api.openWindow('reports', 'cash-book', params);
   };
@@ -115,8 +131,8 @@ export function ReportCashBookContent() {
     );
   }, [result.rows, searchQuery]);
 
-  // A month view spans many days, so it gets a Date column the single-date layout has no use for.
-  const showDate = filterBy === 'month';
+  // A month or a range spans many days, so it gets a Date column the single-date layout has no use for.
+  const showDate = filterBy === 'month' || (filterBy === 'range' && fromDate !== toDate);
 
   const handleExportExcel = () => {
     const headers = [
@@ -193,7 +209,7 @@ export function ReportCashBookContent() {
             {filteredRows.map((row, idx) => (
               <tr key={idx}>
                 <td style={{ ...td('center'), fontFamily: 'monospace' }}>{row.is_first_of_txn ? row.txn_seq : ''}</td>
-                <td style={{ ...td('left'), fontWeight: 'bold', paddingLeft: row.side === 'TO' ? '18px' : '6px', fontStyle: row.is_posted ? 'normal' : 'italic' }}>
+                <td style={{ ...td('left'), fontWeight: 'bold', paddingLeft: row.side === 'TO' ? '18px' : '6px', fontStyle: row.is_posted ? 'normal' : 'italic', color: row.is_posted ? REPORT_COLORS.text : REPORT_COLORS.muted }}>
                   <span style={{ fontSize: '8px', fontWeight: 'bold', color: row.side === 'FROM' ? '#e11d48' : '#047857', marginRight: '5px' }}>
                     {row.side === 'FROM' ? 'FROM' : '\u21b3 TO'}
                   </span>
@@ -204,13 +220,13 @@ export function ReportCashBookContent() {
                     <span style={{ fontSize: '8px', fontWeight: 'bold', marginLeft: '5px', color: '#92400e' }}>(UNPOSTED)</span>
                   )}
                 </td>
-                <td style={td('left')}>{row.remarks || '—'}</td>
+                <td style={{ ...td('left'), color: REPORT_COLORS.muted }}>{row.remarks || '—'}</td>
                 {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(row.date)}</td>}
                 {/* Clipped, not spilling: a long value used to run out of this cell and print on
                     top of Cheque No (reported 2026-09-01). Belt and braces alongside the shorter
                     labels — a future payment mode should not be able to break the layout. */}
-                <td style={{ ...td('left'), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 0 }}>{row.mode}</td>
-                <td style={{ ...td('left'), fontFamily: 'monospace' }}>{row.cheque_no || '—'}</td>
+                <td style={{ ...td('left'), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 0, fontWeight: 'bold', color: row.affects_cash ? '#334155' : '#0369a1' }}>{row.mode}</td>
+                <td style={{ ...td('left'), fontFamily: 'monospace', color: REPORT_COLORS.muted }}>{row.cheque_no || '—'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', color: '#047857' }}>{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', color: '#e11d48' }}>{row.payment_bank > 0 ? formatCurrency(-row.payment_bank) : '-'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#047857' }}>{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
@@ -229,6 +245,22 @@ export function ReportCashBookContent() {
           </tfoot>
         </table>
 
+        {/* Two invariants from the client's own book, shown rather than assumed (moved here from the
+            old on-screen table): the cheque/online pair always balances, and the cash columns ARE
+            the summary figures. If either breaks, a posting went in on the wrong side. */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '18px', fontSize: '9.5px', fontWeight: 'bold', marginTop: '-10px', marginBottom: '4px' }}>
+          <span style={{ color: bankTies ? '#059669' : '#e11d48' }}>
+            {bankTies ? '\u2713 Cheq./Online ties' : `\u26a0 Cheq./Online out by ${formatCurrency(result.totals.receipt_bank - result.totals.payment_bank)}`}
+          </span>
+          <span style={{ color: summaryTies ? '#059669' : '#e11d48' }}>
+            {summaryTies ? '\u2713 Cash matches the summary' : '\u26a0 Cash differs from the summary'}
+          </span>
+        </div>
+        <p style={{ fontSize: '9px', color: REPORT_COLORS.muted, textAlign: 'right', margin: '0 0 15px 0' }}>
+          Cash In and Cash Out need not match — the difference is the day’s net movement.
+          {hasUnposted ? ' Unposted entries are included, as on the client’s own book.' : ''}
+        </p>
+
         {/* Cash summary — at the end of the report, as on the client's own cash book. */}
         <div style={{ maxWidth: '340px', border: '1px solid #000000', marginBottom: '15px' }}>
           {summaryLines(result).map(([label, value, emphasise], idx) => (
@@ -241,10 +273,67 @@ export function ReportCashBookContent() {
               }}
             >
               <span style={{ fontSize: '11px', fontWeight: emphasise ? 'bold' : 'normal' }}>{label} :</span>
-              <span style={{ fontSize: '11px', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(value)}</span>
+              <span style={{ fontSize: '11px', fontWeight: 'bold', fontFamily: 'monospace', color: emphasise ? '#1B2A41' : '#334155' }}>{formatCurrency(value)}</span>
             </div>
           ))}
         </div>
+
+        {/* CB-01 / CB-03, informational only (no cash moved, so they change nothing above). They
+            used to exist on screen only; added to the document per the user, 2026-10-14. */}
+        {result.bank_transfers.length > 0 && (
+          <>
+            <h3 style={{ fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 5px 0' }}>Bank Transfers</h3>
+            <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px', tableLayout: 'fixed' }}>
+              <thead>
+                <tr>
+                  {showDate && <th style={th('left', '12%')}>Date</th>}
+                  <th style={th('left', showDate ? '24%' : '28%')}>From</th>
+                  <th style={th('left', showDate ? '24%' : '28%')}>To</th>
+                  <th style={th('left', '26%')}>Remarks</th>
+                  <th style={th('right', showDate ? '14%' : '18%')}>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.bank_transfers.map((t, idx) => (
+                  <tr key={idx}>
+                    {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(t.date)}</td>}
+                    <td style={{ ...td('left'), fontWeight: 'bold' }}>{t.from_name}</td>
+                    <td style={{ ...td('left'), fontWeight: 'bold' }}>{t.to_name}</td>
+                    <td style={{ ...td('left'), color: REPORT_COLORS.muted }}>{t.remarks || '—'}</td>
+                    <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{formatCurrency(t.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        {result.cheque_deposits.length > 0 && (
+          <>
+            <h3 style={{ fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', margin: '0 0 5px 0' }}>Cheques Deposited</h3>
+            <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px', tableLayout: 'fixed' }}>
+              <thead>
+                <tr>
+                  {showDate && <th style={th('left', '12%')}>Date</th>}
+                  <th style={th('left', '18%')}>Cheque No</th>
+                  <th style={th('left', showDate ? '28%' : '32%')}>From</th>
+                  <th style={th('left', showDate ? '28%' : '32%')}>Deposited To</th>
+                  <th style={th('right', showDate ? '14%' : '18%')}>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.cheque_deposits.map((d, idx) => (
+                  <tr key={idx}>
+                    {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(d.date)}</td>}
+                    <td style={{ ...td('left'), fontFamily: 'monospace', color: REPORT_COLORS.muted }}>{d.cheque_no || '—'}</td>
+                    <td style={{ ...td('left'), fontWeight: 'bold' }}>{d.payer_name}</td>
+                    <td style={td('left')}>{d.bank_name || '—'}</td>
+                    <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{formatCurrency(d.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
 
         <div className="report-signoff" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '35px', padding: '0 10px' }}>
           <div style={{ textAlign: 'center', width: '150px' }}>
@@ -269,13 +358,11 @@ export function ReportCashBookContent() {
     );
   };
 
-  const colCount = showDate ? 10 : 9;
-
   return (
       <div className="mx-auto" style={{ maxWidth: 1250 }}>
 
         {/* Filter Mode Selector - data-no-print */}
-        <div className="flex gap-2 p-1 bg-slate-100 rounded-xl max-w-xs mb-6 border border-slate-200" data-no-print>
+        <div className="flex gap-2 p-1 bg-slate-100 rounded-xl max-w-md mb-6 border border-slate-200" data-no-print>
           <button
             onClick={() => setFilterBy('date')}
             className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${filterBy === 'date' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
@@ -287,6 +374,12 @@ export function ReportCashBookContent() {
             className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${filterBy === 'month' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
             By Month
+          </button>
+          <button
+            onClick={() => setFilterBy('range')}
+            className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 whitespace-nowrap px-2 ${filterBy === 'range' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+          >
+            Between Two Dates
           </button>
         </div>
 
@@ -308,7 +401,21 @@ export function ReportCashBookContent() {
               </div>
             </div>
 
-            {filterBy === 'date' ? (
+            {filterBy === 'range' ? (
+              <div className="flex items-center gap-2">
+                <div>
+                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">From:</span>
+                  <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1 text-xs" />
+                </div>
+                <div>
+                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">To:</span>
+                  <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1 text-xs" />
+                </div>
+                {fromDate && toDate && fromDate > toDate && (
+                  <span className="text-xs font-semibold text-rose-600 self-end pb-1.5">From is after To</span>
+                )}
+              </div>
+            ) : filterBy === 'date' ? (
               <div>
                 <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Date:</span>
                 <input
@@ -358,217 +465,14 @@ export function ReportCashBookContent() {
           </div>
         </div>
 
-        {/* Cash Book Grid */}
-        <div className="card-white p-6 md:p-8 bg-white border">
-
-          <div className="flex items-center justify-between border-b pb-4 mb-6">
-            <div>
-              <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
-              <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Footwear Distribution </p>
-            </div>
-            <div className="text-right">
-              <h2 className="font-lora font-semibold text-lg uppercase">Cash Book of the Day</h2>
-              <p className="text-sm text-slate-700 mt-1 font-semibold uppercase">{periodLabel}</p>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm" style={{ minWidth: 1000 }}>
-              <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  {/* Explicit widths, as the print view already had. Without them the browser
-                      sizes these columns from content, and the `max-w-0` the truncation needs
-                      collapsed Account Name to "Decent Polyur…". Account Name gets the most room
-                      because it is the column the report is read by. Totals 100% in both modes. */}
-                  <th className="p-2 pl-3 text-center" style={{ width: '4%' }}>S#</th>
-                  <th className="p-2" style={{ width: showDate ? '22%' : '24%' }}>Account Name</th>
-                  <th className="p-2" style={{ width: showDate ? '14%' : '16%' }}>Remarks</th>
-                  {showDate && <th className="p-2" style={{ width: '8%' }}>Date</th>}
-                  <th className="p-2" style={{ width: '8%' }}>Type</th>
-                  <th className="p-2" style={{ width: '9%' }}>Cheque No</th>
-                  <th className="p-2 text-right" style={{ width: showDate ? '8.75%' : '9.75%' }}>Receipts<br />Cheq./Online</th>
-                  <th className="p-2 text-right" style={{ width: showDate ? '8.75%' : '9.75%' }}>Payments<br />Cheq./Online</th>
-                  <th className="p-2 text-right" style={{ width: showDate ? '8.75%' : '9.75%' }}>Receipts<br />Cash</th>
-                  <th className="p-2 text-right" style={{ width: showDate ? '8.75%' : '9.75%' }}>Payments<br />Cash</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={colCount} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                ) : filteredRows.length === 0 ? (
-                  <tr><td colSpan={colCount} className="text-center p-8 text-slate-400">No cash entries found for this period.</td></tr>
-                ) : (
-                  filteredRows.map((row, idx) => (
-                    // A transaction is a FROM row immediately followed by its TO row. The pair is
-                    // kept visually together by hanging the S# and the top border on the FROM row
-                    // only, so the eye reads "this money left here -> and landed here" as one unit
-                    // instead of two unrelated lines.
-                    <tr
-                      key={idx}
-                      className={`hover:bg-slate-50/50 ${row.is_first_of_txn ? 'border-t' : ''}`}
-                      style={{ borderColor: 'var(--border-table)' }}
-                    >
-                      <td className="p-1.5 pl-3 text-center text-xs font-mono text-slate-400">
-                        {row.is_first_of_txn ? row.txn_seq : ''}
-                      </td>
-                      {/* Compacted to the client's own row height: p-1.5, one line per cell, and
-                          long text clipped rather than wrapped. The height was coming from
-                          wrapping — a long reversal narration ran to three lines and took the row
-                          with it — not from the padding. `truncate` needs the max-w to bite. */}
-                      <td className={`p-1.5 truncate max-w-0 ${row.side === 'TO' ? 'pl-6' : ''}`}>
-                        <span className={`inline-block w-9 shrink-0 text-[9px] font-bold uppercase tracking-wider ${row.side === 'FROM' ? 'text-rose-500' : 'text-emerald-600'}`}>
-                          {row.side === 'FROM' ? 'From' : '\u21b3 To'}
-                        </span>
-                        <span className={row.is_posted ? 'font-semibold text-slate-800' : 'font-semibold text-slate-500 italic'}>{row.account_name}</span>
-                        {/* Only on the first line of an unposted entry, so the pair reads as one
-                            thing rather than repeating the badge. */}
-                        {!row.is_posted && row.is_first_of_txn && (
-                          <span className="ml-1.5 px-1 rounded text-[8px] font-bold uppercase bg-amber-100 text-amber-800 align-middle">
-                            Unposted
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-1.5 text-xs text-slate-500 truncate max-w-0" title={row.remarks || undefined}>{row.remarks || '-'}</td>
-                      {showDate && <td className="p-1.5 text-xs font-mono text-slate-600 whitespace-nowrap">{formatDate(row.date)}</td>}
-                      <td className="p-1.5 whitespace-nowrap">
-                        <span className={`inline-block text-[9px] px-1.5 rounded-full font-bold uppercase ${row.affects_cash ? 'bg-slate-100 text-slate-700' : 'bg-sky-50 text-sky-700'}`}>
-                          {row.mode}
-                        </span>
-                      </td>
-                      <td className="p-1.5 text-xs font-mono text-slate-500 whitespace-nowrap">{row.cheque_no || '-'}</td>
-                      <td className="p-1.5 text-right text-emerald-700 whitespace-nowrap">{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
-                      <td className="p-1.5 text-right text-rose-700 whitespace-nowrap">{row.payment_bank > 0 ? formatCurrency(-row.payment_bank) : '-'}</td>
-                      <td className="p-1.5 text-right font-bold text-emerald-700 whitespace-nowrap">{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
-                      <td className="p-1.5 text-right font-bold text-rose-700 whitespace-nowrap">{row.payment_cash > 0 ? formatCurrency(-row.payment_cash) : '-'}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-
-              <tfoot>
-                <tr className="bg-slate-50 font-bold border-t-2 border-b text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td colSpan={showDate ? 6 : 5} className="p-4 text-right font-lora">TOTALS</td>
-                  <td className="p-4 text-right text-emerald-800">{formatCurrency(result.totals.receipt_bank)}</td>
-                  <td className="p-4 text-right text-rose-800">{formatCurrency(outgoing(result.totals.payment_bank))}</td>
-                  <td className="p-4 text-right text-emerald-800">{formatCurrency(result.totals.receipt_cash)}</td>
-                  <td className="p-4 text-right text-rose-800">{formatCurrency(outgoing(result.totals.payment_cash))}</td>
-                </tr>
-                {/* Two invariants from the client's own book, shown rather than assumed: the
-                    cheque/online pair always balances, and the cash columns ARE the summary
-                    figures. If either breaks, a posting went in on the wrong side. */}
-                <tr className="text-[11px] font-semibold" style={{ borderColor: 'var(--border-color)' }}>
-                  <td colSpan={showDate ? 6 : 5} className="px-4 pb-1 text-right text-slate-400 uppercase tracking-wider">Balanced</td>
-                  <td colSpan={2} className={`px-4 pb-1 text-center ${bankTies ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {bankTies ? '\u2713 Cheq./Online ties' : `\u26a0 out by ${formatCurrency(result.totals.receipt_bank - result.totals.payment_bank)}`}
-                  </td>
-                  <td colSpan={2} className={`px-4 pb-1 text-center ${summaryTies ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {summaryTies ? '\u2713 matches the summary' : '\u26a0 differs from the summary'}
-                  </td>
-                </tr>
-                {/* The cash columns are not meant to be equal — the gap IS the day's net drawer
-                    movement, which Cash In Hand reports below. Said plainly so it doesn't read as
-                    an error, which is exactly how it read before. */}
-                <tr className="text-[10px]">
-                  <td colSpan={showDate ? 10 : 9} className="px-4 pb-3 text-right text-slate-400">
-                    Cash In and Cash Out need not match \u2014 the difference is the day\u2019s net movement.
-                    {hasUnposted ? ' Unposted entries are included, as on the client\u2019s own book.' : ''}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-
-          {/* Cash summary — closes the report, as on the client's own cash book. Cash only: the
-              cheque/online rows above are listed for visibility and change none of these figures. */}
-          <div className="mt-8 max-w-sm rounded-xl border overflow-hidden" style={{ borderColor: 'var(--border-color)' }}>
-            {summaryLines(result).map(([label, value, emphasise], idx) => (
-              <div
-                key={label}
-                className={`flex items-center justify-between px-4 py-2.5 ${idx > 0 ? 'border-t' : ''} ${emphasise ? 'bg-slate-50' : 'bg-white'}`}
-                style={{ borderColor: 'var(--border-table)' }}
-              >
-                <span className={`text-xs uppercase tracking-wider ${emphasise ? 'font-bold text-slate-700' : 'font-semibold text-slate-500'}`}>
-                  {label}
-                </span>
-                <span
-                  className="text-sm font-bold font-mono"
-                  style={{ color: emphasise ? 'var(--brand-navy)' : '#334155' }}
-                >
-                  {formatCurrency(value)}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* CB-01: bank-to-bank transfers, informational only — no cash moved, so they change
-              nothing above. */}
-          {result.bank_transfers.length > 0 && (
-            <div className="mt-8">
-              <h3 className="font-lora font-semibold text-sm text-slate-700 mb-2 uppercase tracking-wide">Bank Transfers</h3>
-              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                      {showDate && <th className="p-3 pl-4">Date</th>}
-                      <th className="p-3">From</th>
-                      <th className="p-3">To</th>
-                      <th className="p-3">Remarks</th>
-                      <th className="p-3 text-right pr-4">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.bank_transfers.map((t, idx) => (
-                      <tr key={idx} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                        {showDate && <td className="p-3 pl-4 text-xs font-mono text-slate-600">{formatDate(t.date)}</td>}
-                        <td className="p-3 font-semibold text-slate-800">{t.from_name}</td>
-                        <td className="p-3 font-semibold text-slate-800">{t.to_name}</td>
-                        <td className="p-3 text-xs text-slate-500">{t.remarks || '-'}</td>
-                        <td className="p-3 text-right pr-4 font-mono font-semibold text-slate-700">{formatCurrency(t.amount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* CB-03: cheques deposited/banked that day — informational only, alongside the
-              Issued/Endorsed/Received cheque events already in the main grid above. */}
-          {result.cheque_deposits.length > 0 && (
-            <div className="mt-8">
-              <h3 className="font-lora font-semibold text-sm text-slate-700 mb-2 uppercase tracking-wide">Cheques Deposited</h3>
-              <div className="overflow-x-auto rounded-xl border" style={{ borderColor: 'var(--border-color)' }}>
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                      {showDate && <th className="p-3 pl-4">Date</th>}
-                      <th className="p-3">Cheque No</th>
-                      <th className="p-3">From</th>
-                      <th className="p-3">Deposited To</th>
-                      <th className="p-3 text-right pr-4">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.cheque_deposits.map((d, idx) => (
-                      <tr key={idx} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                        {showDate && <td className="p-3 pl-4 text-xs font-mono text-slate-600">{formatDate(d.date)}</td>}
-                        <td className="p-3 text-xs font-mono text-slate-500">{d.cheque_no || '-'}</td>
-                        <td className="p-3 font-semibold text-slate-800">{d.payer_name}</td>
-                        <td className="p-3 text-slate-700">{d.bank_name || '-'}</td>
-                        <td className="p-3 text-right pr-4 font-mono font-semibold text-slate-700">{formatCurrency(d.amount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-        </div>
+        {/* The report: the same document the print preview prints (Product Ledger layout, per the user 2026-10-14). */}
+        <LiveReportDocument loading={loading && !hasLoadedOnce}>
+          {renderPrintableDocument()}
+        </LiveReportDocument>
 
         <ReportPrintPreviewModal
           isOpen={isPreviewOpen}
-          onClose={() => setIsPreviewOpen(false)}
+          onClose={() => { setIsPreviewOpen(false); closePreviewWindow(); }}
           title="Daily Cash Book Report - Print Preview"
           orientation="landscape"
           onExportExcel={handleExportExcel}

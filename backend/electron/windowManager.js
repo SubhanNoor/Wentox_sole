@@ -17,6 +17,65 @@ let mainWindow = null;
 // independent.
 const childWindows = new Set();
 
+// Child windows float above the main window while Wentox is the active app, and drop back to
+// normal stacking the moment the user switches to another application (per the user, 2026-10-11:
+// clicking the main window used to bury every open child window behind it). `parent` would do the
+// first half natively but breaks child minimize/maximize (see childWindows above), and a plain
+// always-on-top would cover Chrome, WhatsApp, etc. too — so it's toggled with app focus instead.
+//
+// Deferred one tick: moving focus between two Wentox windows fires the old one's `blur` before the
+// new one's `focus`, and checking in between would see "no Wentox window focused" and flicker every
+// child down and back up. A native dialog (print, save, message box) isn't a BrowserWindow, so it
+// also reads as "app inactive" — which is what lets that dialog show above the children.
+//
+// The Set doubles as the stacking order, oldest-used first: a child moves to the end whenever it
+// gains focus (or opens). Re-raising always walks it in that order, so the newest / most recently
+// used window ends up on top (per the user, 2026-10-11: "the last window should appear on top"). On
+// Windows each setAlwaysOnTop(true) lands that window at the top of the topmost band, so raising in
+// any other order would shuffle the user's own stacking every time they came back from another app.
+function isAppActive() {
+  const focused = BrowserWindow.getFocusedWindow();
+  return !!focused && (focused === mainWindow || childWindows.has(focused));
+}
+
+function raiseChildren() {
+  for (const w of childWindows) {
+    if (w.isDestroyed()) continue;
+    w.setAlwaysOnTop(true);
+    // Raising a minimized window must not bring it back — only the user restores it.
+    if (w.isVisible() && !w.isMinimized()) w.moveTop();
+  }
+}
+
+let syncScheduled = false;
+let childrenOnTop = false;
+function scheduleOnTopSync() {
+  if (syncScheduled) return;
+  syncScheduled = true;
+  setImmediate(() => {
+    syncScheduled = false;
+    const appActive = isAppActive();
+    if (appActive === childrenOnTop) return;
+    childrenOnTop = appActive;
+    if (appActive) raiseChildren();
+    else for (const w of childWindows) { if (!w.isDestroyed()) w.setAlwaysOnTop(false); }
+  });
+}
+
+// A newly opened child has to come up on top of every other child. It can't rely on gaining focus
+// to get there: Ubuntu/GNOME's focus-stealing prevention often refuses it (the "'Sale Bill' is
+// ready" notification instead), which left the newest window as the only one NOT floating, i.e.
+// underneath all the older ones. So it's floated and raised explicitly, then asked for focus.
+function showChild(win) {
+  if (isAppActive() || childrenOnTop) {
+    win.setAlwaysOnTop(true);
+    childrenOnTop = true;
+  }
+  win.show();
+  win.moveTop();
+  win.focus();
+}
+
 // Cascades each new window a little further down-right than the last, like the legacy app's own
 // floating document windows (the reference screenshot the user sent, 2026-09-07). Without an
 // explicit position, every BrowserWindow defaults to roughly the same spot, so a second window
@@ -49,7 +108,12 @@ function nextCascadePosition(width, height) {
 // back only the keys it itself put in (frontend/src/lib/windowParams.ts), e.g. so "Show Print
 // Preview" can open a new window landing on the exact same filtered report (per the user,
 // 2026-09-03) instead of a blank default one.
-function createAppWindow(page, tab, { child = false, params = {} } = {}) {
+// `opener` (windows:open only) is the window that asked for this one — closing this window via its
+// own Exit/close action hands focus back there (closeChildAndFocusMain below), e.g. a report's
+// print-preview window returning to the report's filter window rather than to the main window.
+const openerOf = new WeakMap();
+
+function createAppWindow(page, tab, { child = false, params = {}, opener = null } = {}) {
   const width = child ? 1000 : 1280;
   const height = child ? 720 : 800;
   const win = new BrowserWindow({
@@ -71,12 +135,19 @@ function createAppWindow(page, tab, { child = false, params = {} } = {}) {
 
   // ready-to-show never fires if the page fails to load, so a fallback timer makes sure a window
   // can never stay invisible.
-  const showTimer = setTimeout(() => { if (!win.isDestroyed() && !win.isVisible()) win.show(); }, 3000);
-  win.once('ready-to-show', () => { clearTimeout(showTimer); win.show(); });
+  const reveal = () => { if (child) showChild(win); else win.show(); };
+  const showTimer = setTimeout(() => { if (!win.isDestroyed() && !win.isVisible()) reveal(); }, 3000);
+  win.once('ready-to-show', () => { clearTimeout(showTimer); reveal(); });
   win.on('closed', () => clearTimeout(showTimer));
+
+  win.on('focus', scheduleOnTopSync);
+  win.on('blur', scheduleOnTopSync);
 
   if (child) {
     childWindows.add(win);
+    if (opener && !opener.isDestroyed()) openerOf.set(win, opener);
+    // Most recently used goes last — see raiseChildren().
+    win.on('focus', () => { childWindows.delete(win); childWindows.add(win); });
     win.on('closed', () => childWindows.delete(win));
   } else {
     mainWindow = win;
@@ -109,16 +180,37 @@ function createAppWindow(page, tab, { child = false, params = {} } = {}) {
   return win;
 }
 
-// Exit on a document opened in its own window: close that window and bring the main ("mother")
-// window forward, rather than letting the OS hand focus to whichever window happens to be next.
+// The main window's "Open Windows" list (frontend/src/components/OpenWindowsMenu.tsx). A child's
+// title is its page's own name — AppLayout.tsx sets document.title in child windows, and Electron
+// mirrors that onto the BrowserWindow.
+function listChildWindows() {
+  return [...childWindows]
+    .filter((w) => !w.isDestroyed())
+    .map((w) => ({ id: w.id, title: w.getTitle(), minimized: w.isMinimized() }));
+}
+
+function focusChildWindow(id) {
+  const win = [...childWindows].find((w) => !w.isDestroyed() && w.id === id);
+  if (!win) return false;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  return true;
+}
+
+// Exit on a document opened in its own window: close that window and bring forward the window that
+// opened it — or the main ("mother") window when that one is gone or unknown — rather than letting
+// the OS hand focus to whichever window happens to be next.
 function closeChildAndFocusMain(win) {
   if (!win || win.isDestroyed() || !childWindows.has(win)) return false;
+  const opener = openerOf.get(win);
+  const target = opener && !opener.isDestroyed() ? opener : mainWindow;
   win.close();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+  if (target && !target.isDestroyed()) {
+    if (target.isMinimized()) target.restore();
+    target.focus();
   }
   return true;
 }
 
-module.exports = { createAppWindow, closeChildAndFocusMain };
+module.exports = { createAppWindow, closeChildAndFocusMain, listChildWindows, focusChildWindow };

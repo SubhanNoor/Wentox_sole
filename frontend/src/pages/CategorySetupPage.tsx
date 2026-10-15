@@ -6,8 +6,11 @@ import * as api from '@/lib/api';
 import type { CategoryRow, ProductRow } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function CategorySetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [categorySearch, setCategorySearch] = useState('');
 
   // Modal State
@@ -32,7 +35,7 @@ export default function CategorySetupPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, dataVersion]);
 
   // Form State — persisted only while adding a NEW category (not editing an existing one, which
   // is re-openable by id at any time and would risk a stale cached copy).

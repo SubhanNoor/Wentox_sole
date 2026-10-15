@@ -22,6 +22,7 @@ import { useLatestOnly } from '@/hooks/useLatestOnly';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 import { amountToDebitCredit, debitCreditToAmount } from '@/lib/journalVoucherMath';
 
 /**
@@ -70,6 +71,7 @@ function emptyEntry(): EntryLine {
 
 export default function JournalVoucherPage() {
   const { dispatch } = useApp();
+  const dataVersion = useDataVersion();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
   // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
@@ -128,11 +130,20 @@ export default function JournalVoucherPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshUnposted]);
 
+  // Live update (per the user, 2026-10-15): a save in another window refreshes the account list and
+  // Unposted here too. The open-time "no unposted → blank entry" reset above stays an on-open rule,
+  // so a voucher on screen is never swapped out from under the user.
+  useEffect(() => {
+    if (dataVersion === 0) return;
+    api.listBusinessAccounts({ excludeClosed: true }).then(ba => { if (ba.ok) setAccounts(ba.data); });
+    Promise.resolve().then(refreshUnposted);
+  }, [dataVersion, refreshUnposted]);
+
   // Debounced so typing a search term doesn't fire a query per keystroke.
   useEffect(() => {
     const t = setTimeout(refresh, 250);
     return () => clearTimeout(t);
-  }, [refresh]);
+  }, [refresh, dataVersion]);
 
   const handlePostAll = async () => {
     setPostAllBusy(true);
@@ -813,7 +824,7 @@ export default function JournalVoucherPage() {
     return res.ok ? res.data : null;
   }, []);
 
-  useEffect(() => { refreshNav(); }, [refreshNav]);
+  useEffect(() => { refreshNav(); }, [refreshNav, dataVersion]);
 
   const navPostedList = useMemo(
     () => [...navVouchers].filter(v => v.status === 'CONFIRMED').reverse(),

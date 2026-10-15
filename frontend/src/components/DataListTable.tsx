@@ -140,7 +140,9 @@ export default function DataListTable<T>({
         </thead>
 
         <tbody>
-          {loading ? (
+          {/* Only while there's nothing to show yet: a reload (e.g. another window saved, live update
+              2026-10-15) keeps the current rows up instead of flashing "Loading…". */}
+          {loading && rows.length === 0 ? (
             <tr>
               <td colSpan={colSpan} className="text-center p-8 text-slate-400">
                 {loadingMessage}
@@ -225,7 +227,7 @@ export default function DataListTable<T>({
           )}
         </tbody>
 
-        {footer && !loading && rows.length > 0 && <tfoot>{footer}</tfoot>}
+        {footer && rows.length > 0 && <tfoot>{footer}</tfoot>}
       </table>
     </div>
   );

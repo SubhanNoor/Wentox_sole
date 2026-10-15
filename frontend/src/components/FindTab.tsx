@@ -9,6 +9,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface FindTabProps {
   onEditBill: (bill: SaleBillRow) => void;
@@ -16,6 +17,8 @@ interface FindTabProps {
 }
 
 export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [bills, setBills] = useState<SaleBillRow[]>([]);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
@@ -34,7 +37,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
       if (ad.ok) setAddas(ad.data);
       if (p.ok) setProducts(p.data);
     })();
-  }, []);
+  }, [dataVersion]);
 
   // ── Search Filter State ──────────────────────────────────────────────────────
   const [fromDate, setFromDate]             = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
@@ -75,7 +78,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
       if (res.ok) setBills(res.data);
       setHasLoadedOnce(true);
     })();
-  }, [fromDate, toDate]);
+  }, [fromDate, toDate, dataVersion]);
 
   // "Show Print Preview" opens a new window on this same filtered directory (per the user,
   // 2026-09-03), instead of an in-page overlay.

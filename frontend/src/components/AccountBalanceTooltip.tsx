@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import * as api from '@/lib/api';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 /**
  * RJ-02: small live balance readout next to the account field on Receipts/Payments — replaces
@@ -26,6 +27,8 @@ interface AccountBalanceTooltipProps {
 }
 
 export default function AccountBalanceTooltip({ baId, className = '', refreshKey = 0, hideLabel = false }: AccountBalanceTooltipProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [loaded, setLoaded] = useState<{ baId: number; balance: number } | null>(null);
 
   useEffect(() => {
@@ -36,7 +39,7 @@ export default function AccountBalanceTooltip({ baId, className = '', refreshKey
       if (res.ok) setLoaded({ baId, balance: res.data.balance });
     });
     return () => { cancelled = true; };
-  }, [baId, refreshKey]);
+  }, [baId, refreshKey, dataVersion]);
 
   if (baId == null) return null;
 

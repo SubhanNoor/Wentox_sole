@@ -4,6 +4,7 @@ import * as api from '@/lib/api';
 import type { SaleReturnRow, CustomerRow, SubCustomerRow, CityRow } from '@/lib/api';
 import { formatDate, formatCartons } from '@/lib/utils';
 import { Calendar, Search, ArrowLeft, FileText, Printer, ChevronDown, Check, MapPin, Eye } from 'lucide-react';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface MonthlyReturnTabProps {
   onOpenReturn: (ret: SaleReturnRow) => void;
@@ -11,6 +12,8 @@ interface MonthlyReturnTabProps {
 }
 
 export default function MonthlyReturnTab({ onOpenReturn, onPrintReturn }: MonthlyReturnTabProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [returns, setReturns] = useState<SaleReturnRow[]>([]);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
@@ -27,7 +30,7 @@ export default function MonthlyReturnTab({ onOpenReturn, onPrintReturn }: Monthl
       if (sc.ok) setSubCustomers(sc.data);
       if (ct.ok) setCities(ct.data);
     })();
-  }, []);
+  }, [dataVersion]);
 
   // Filters & Popover State
   const [nameQuery, setNameQuery] = useState('');

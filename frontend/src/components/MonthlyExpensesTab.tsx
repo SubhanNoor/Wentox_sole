@@ -4,6 +4,7 @@ import * as api from '@/lib/api';
 import type { ExpenseRow, BusinessAccountRow, ExpenseVoucherRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, Undo2 } from 'lucide-react';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 function isChequeMode(mode: ExpenseRow['payment_mode']): boolean {
   return mode === 'CHEQUE_ENDORSED' || mode === 'CHEQUE_ISSUED';
@@ -27,6 +28,8 @@ interface MonthlyExpensesTabProps {
 }
 
 export default function MonthlyExpensesTab({ onVoucherUnposted }: MonthlyExpensesTabProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [rows, setRows] = useState<ExpenseRow[]>([]);
   const [businessAccounts, setBusinessAccounts] = useState<BusinessAccountRow[]>([]);
   const [vouchers, setVouchers] = useState<ExpenseVoucherRow[]>([]);
@@ -43,7 +46,7 @@ export default function MonthlyExpensesTab({ onVoucherUnposted }: MonthlyExpense
     if (v.ok) setVouchers(v.data);
   };
 
-  useEffect(() => { refreshAll(); }, []);
+  useEffect(() => { refreshAll(); }, [dataVersion]);
 
   const voucherLookup = useMemo(() => new Map(vouchers.map(v => [v.voucher_id, v])), [vouchers]);
 

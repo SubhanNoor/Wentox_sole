@@ -8,8 +8,11 @@ import * as api from '@/lib/api';
 import type { SubCustomerRow, RegionRow, CityRow } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function SubCustomerSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [searchQuery, setSearchQuery] = useState('');
 
   // Modal State
@@ -52,7 +55,7 @@ export default function SubCustomerSetupPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, dataVersion]);
 
   const handleOpenAddModal = () => {
     setSelectedSubId(null);

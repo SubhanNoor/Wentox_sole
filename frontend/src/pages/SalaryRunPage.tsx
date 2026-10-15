@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useDataVersion } from '@/hooks/useDataVersion';
 import { formatCurrency } from '@/context/AppContext';
 import * as api from '@/lib/api';
 import type { EmployeeRow, SalaryRunRow } from '@/lib/api';
@@ -24,6 +25,7 @@ const monthLabel = (ym: string) => {
 };
 
 export default function SalaryRunPage() {
+  const dataVersion = useDataVersion();
   const [salariedEmployees, setSalariedEmployees] = useState<EmployeeRow[]>([]);
   const [runs, setRuns] = useState<SalaryRunRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,8 +69,8 @@ export default function SalaryRunPage() {
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
-  const loadAll = useCallback(async () => {
-    setLoading(true);
+  const loadAll = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     const [empRes, runRes] = await Promise.all([
       api.employees.list({ employee_type: 'SALARIED' }),
       api.salaryRuns.list(),
@@ -79,6 +81,9 @@ export default function SalaryRunPage() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+  // Live update (per the user, 2026-10-15): another window's save reloads the lists quietly — no
+  // "Loading…" swap, and the typed rows live in their own state, so nothing being entered is lost.
+  useEffect(() => { if (dataVersion > 0) Promise.resolve().then(() => loadAll(true)); }, [dataVersion, loadAll]);
 
   // A month is unambiguous, so a second POSTED run for it is always a mistake —
   // unlike a wage run, where the settlement period is fuzzy and a second run in

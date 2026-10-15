@@ -15,8 +15,11 @@ import {
 } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function GroupAcSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [groups, setGroups] = useState<GroupAccountRow[]>([]);
   const [classes, setClasses] = useState<AccountClassRow[]>([]);
   const [viewingChildCharts, setViewingChildCharts] = useState<ChartOfAccountRow[]>([]);
@@ -66,7 +69,7 @@ export default function GroupAcSetupPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, dataVersion]);
 
   const handleOpenAddModal = () => {
     setSelectedId(null);

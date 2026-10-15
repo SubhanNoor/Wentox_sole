@@ -15,8 +15,11 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function CustomerSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   // Directory view state
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(() => { const p = getWindowParam('selectedCustomerId'); return p != null ? Number(p) : null; });
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,7 +43,7 @@ export default function CustomerSetupPage() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); }, [loadAll, dataVersion]);
 
   // Modal state
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -82,7 +85,7 @@ export default function CustomerSetupPage() {
     setLedgerLoading(false);
   }, [selectedCustomer, fromDate, toDate]);
 
-  useEffect(() => { if (selectedCustomerId) loadLedger(); }, [selectedCustomerId, loadLedger]);
+  useEffect(() => { if (selectedCustomerId) loadLedger(); }, [selectedCustomerId, loadLedger, dataVersion]);
 
   // "Show Print Preview" opens a new window on this same customer's ledger (per the user,
   // 2026-09-03), instead of an in-page overlay.

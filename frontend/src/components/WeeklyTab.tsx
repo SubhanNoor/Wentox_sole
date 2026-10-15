@@ -4,6 +4,7 @@ import * as api from '@/lib/api';
 import type { SaleBillRow, CustomerRow, SubCustomerRow, AddaRow, CityRow } from '@/lib/api';
 import { formatDate, formatCartons } from '@/lib/utils';
 import { Calendar, Search, ArrowLeft, FileText, Edit2, Printer, MapPin } from 'lucide-react';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface WeeklyTabProps {
   onEditBill: (bill: SaleBillRow) => void;
@@ -11,6 +12,8 @@ interface WeeklyTabProps {
 }
 
 export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [bills, setBills] = useState<SaleBillRow[]>([]);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [subCustomers, setSubCustomers] = useState<SubCustomerRow[]>([]);
@@ -29,7 +32,7 @@ export default function WeeklyTab({ onEditBill, onPrintBill }: WeeklyTabProps) {
       if (ad.ok) setAddas(ad.data);
       if (ct.ok) setCities(ct.data);
     })();
-  }, []);
+  }, [dataVersion]);
 
   // Filters
   const [nameQuery, setNameQuery] = useState('');

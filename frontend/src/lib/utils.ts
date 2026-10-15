@@ -33,6 +33,23 @@ export function getTodayDate(): string {
   return `${year}-${month}-${day}`;
 }
 
+// Monday of the current week (local date) — the "This Week" report button's From date. Weeks run
+// Monday to Sunday, same as the Stock page's Weekly Production report.
+export function getWeekStartDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// 1st of the current month (local date) — Cash Book's "Between Two Dates" starts here.
+export function getMonthStartDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
 export function getThreeMonthsAgoDate(): string {
   const d = new Date();
   d.setMonth(d.getMonth() - 3);

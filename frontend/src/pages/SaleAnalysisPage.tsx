@@ -1,8 +1,9 @@
 import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
+import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { ChevronDown, ChevronRight, Eye } from 'lucide-react';
+import { Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import { groupByRegion, groupByCity, groupByRegionThenCity } from '@/lib/geoGrouping';
@@ -10,7 +11,11 @@ import * as api from '@/lib/api';
 import type { SaleAnalysisRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { closePreviewWindow } from '@/components/reports/previewWindow';
+import LiveReportDocument from '@/components/reports/LiveReportDocument';
+import { REPORT_COLORS, signedColor } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -50,20 +55,14 @@ function sumMetrics(rows: Metrics[]): Metrics {
 }
 
 export function SaleAnalysisContent() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [groupMode, setGroupMode] = useState<GroupMode>(() => (getWindowParam('groupMode') as GroupMode) || 'customer');
   const [viewMode, setViewMode] = useState<'overall' | 'month' | 'range'>(() => (getWindowParam('viewMode') as 'overall' | 'month' | 'range') || 'overall');
   const [filterMonth, setFilterMonth] = useState(() => { const p = getWindowParam('filterMonth'); return p != null ? Number(p) : new Date().getMonth(); });
   const [filterYear, setFilterYear] = useState(() => { const p = getWindowParam('filterYear'); return p != null ? Number(p) : new Date().getFullYear(); });
   const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
-  const [expandedRegionId, setExpandedRegionId] = useState<number | null>(null);
-  const [expandedCityId, setExpandedCityId] = useState<number | null>(null);
-
-  const changeGroupMode = (mode: GroupMode) => {
-    setGroupMode(mode);
-    setExpandedRegionId(null);
-    setExpandedCityId(null);
-  };
 
   const [rows, setRows] = useState<SaleAnalysisRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -94,14 +93,14 @@ export function SaleAnalysisContent() {
     setHasLoadedOnce(true);
   }, [periodStart, periodEnd]);
 
-  useEffect(() => { loadRows(); }, [loadRows]);
+  useEffect(() => { loadRows(); }, [loadRows, dataVersion]);
 
   // "Show Print Preview" opens a new window on this same filtered/grouped report (per the user,
   // 2026-09-03), instead of an in-page overlay.
   const handleShowPrintPreview = () => {
     api.openWindow('reports', 'sale-analysis', {
       groupMode, viewMode, filterMonth: String(filterMonth), filterYear: String(filterYear),
-      fromDate, toDate, autoPreview: '1',
+      fromDate, toDate, skipZero: skipZero ? '1' : '0', autoPreview: '1',
     });
   };
 
@@ -112,6 +111,8 @@ export function SaleAnalysisContent() {
 
   // "Payment Received" combines the receipt amount and commission, same as the receipt-level
   // Dr customer BA / Cr COMMISSION_ALLOWED pair both reduce what the customer owes.
+  const [skipZero, setSkipZero] = useState(() => getWindowParam('skipZero') === '1');
+
   const customerRows = useMemo(() => {
     return rows
       .map(r => ({
@@ -124,10 +125,15 @@ export function SaleAnalysisContent() {
         totalSales: r.total_sales,
         saleReturns: r.total_returns,
         paymentReceived: r.total_payment + r.total_commission,
-        balance: r.total_sales - r.total_returns - (r.total_payment + r.total_commission),
+        // The customer's real account balance on the To date, from the backend — the same figure its
+        // ledger closes on, opening balance and earlier bills included (per the user, 2026-10-13; it
+        // used to be this period's sales - returns - payments only).
+        balance: r.balance,
       }))
-      .filter(row => row.totalSales > 0 || row.saleReturns > 0 || row.paymentReceived > 0);
-  }, [rows]);
+      // Idle customers still carrying a balance stay listed (per the user, 2026-10-14).
+      .filter(row => row.totalSales > 0 || row.saleReturns > 0 || row.paymentReceived > 0 || !isZeroBalance(row.balance))
+      .filter(row => !(skipZero && isZeroBalance(row.balance)));
+  }, [rows, skipZero]);
 
   const regionGroups = useMemo(
     () => groupByRegion(customerRows).map(g => ({ ...g, ...sumMetrics(g.rows) })),
@@ -213,28 +219,28 @@ export function SaleAnalysisContent() {
             {groupMode === 'customer' && customerRows.map(c => (
               <tr key={c.customerId}>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{c.customerName}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.totalSales)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.saleReturns)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.paymentReceived)}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCurrency(c.balance)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.sales }}>{formatCurrency(c.totalSales)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(c.saleReturns)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(c.paymentReceived)}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: signedColor(c.balance) }}>{formatCurrency(c.balance)}</td>
               </tr>
             ))}
             {(groupMode === 'region' ? regionGroups : groupMode === 'city' ? cityGroups : []).map(g => (
               <Fragment key={String(g.id)}>
                 <tr style={{ backgroundColor: '#f9f9f9', fontWeight: 'bold' }}>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{g.name}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.totalSales)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.saleReturns)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.paymentReceived)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.balance)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.sales }}>{formatCurrency(g.totalSales)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(g.saleReturns)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(g.paymentReceived)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: signedColor(g.balance) }}>{formatCurrency(g.balance)}</td>
                 </tr>
                 {g.rows.map(c => (
                   <tr key={c.customerId}>
                     <td style={{ border: '1px solid #000000', padding: '4px 6px 4px 20px', fontSize: '10.5px' }}>{c.customerName}</td>
-                    <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.totalSales)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.saleReturns)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.paymentReceived)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.balance)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.sales }}>{formatCurrency(c.totalSales)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(c.saleReturns)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(c.paymentReceived)}</td>
+                    <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: signedColor(c.balance) }}>{formatCurrency(c.balance)}</td>
                   </tr>
                 ))}
               </Fragment>
@@ -243,27 +249,27 @@ export function SaleAnalysisContent() {
               <Fragment key={String(g.id)}>
                 <tr style={{ backgroundColor: '#f2f2f2', fontWeight: 'bold' }}>
                   <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px' }}>{g.name}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.totalSales)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.saleReturns)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.paymentReceived)}</td>
-                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(g.balance)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.sales }}>{formatCurrency(g.totalSales)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(g.saleReturns)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(g.paymentReceived)}</td>
+                  <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: signedColor(g.balance) }}>{formatCurrency(g.balance)}</td>
                 </tr>
                 {g.cities.map(c => (
                   <Fragment key={`${g.id}-${c.id}`}>
                     <tr style={{ backgroundColor: '#f9f9f9', fontWeight: 'bold' }}>
                       <td style={{ border: '1px solid #000000', padding: '4px 6px 4px 14px', fontSize: '10.5px' }}>{c.name}</td>
-                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.totalSales)}</td>
-                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.saleReturns)}</td>
-                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.paymentReceived)}</td>
-                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(c.balance)}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.sales }}>{formatCurrency(c.totalSales)}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(c.saleReturns)}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(c.paymentReceived)}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: signedColor(c.balance) }}>{formatCurrency(c.balance)}</td>
                     </tr>
                     {c.rows.map(cust => (
                       <tr key={cust.customerId}>
                         <td style={{ border: '1px solid #000000', padding: '4px 6px 4px 28px', fontSize: '10px' }}>{cust.customerName}</td>
-                        <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(cust.totalSales)}</td>
-                        <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(cust.saleReturns)}</td>
-                        <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(cust.paymentReceived)}</td>
-                        <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(cust.balance)}</td>
+                        <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.sales }}>{formatCurrency(cust.totalSales)}</td>
+                        <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(cust.saleReturns)}</td>
+                        <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(cust.paymentReceived)}</td>
+                        <td style={{ border: '1px solid #000000', padding: '4px 6px', fontSize: '10px', textAlign: 'right', fontFamily: 'monospace', color: signedColor(cust.balance) }}>{formatCurrency(cust.balance)}</td>
                       </tr>
                     ))}
                   </Fragment>
@@ -272,10 +278,10 @@ export function SaleAnalysisContent() {
             ))}
             <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.totalSales)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.saleReturns)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(grandTotals.paymentReceived)}</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(grandTotals.balance)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.sales }}>{formatCurrency(grandTotals.totalSales)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.returns }}>{formatCurrency(grandTotals.saleReturns)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: REPORT_COLORS.payment }}>{formatCurrency(grandTotals.paymentReceived)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{formatCurrency(grandTotals.balance)}</td>
             </tr>
           </tbody>
         </table>
@@ -311,7 +317,7 @@ export function SaleAnalysisContent() {
           {(Object.keys(GROUP_LABELS) as GroupMode[]).map(mode => (
             <button
               key={mode}
-              onClick={() => changeGroupMode(mode)}
+              onClick={() => setGroupMode(mode)}
               className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 cursor-pointer ${groupMode === mode ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               {GROUP_LABELS[mode]}
@@ -384,6 +390,7 @@ export function SaleAnalysisContent() {
           </div>
 
           <div className="flex items-center gap-2">
+            <SkipZeroToggle value={skipZero} onChange={setSkipZero} />
             <button
               onClick={handleShowPrintPreview}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
@@ -393,161 +400,15 @@ export function SaleAnalysisContent() {
           </div>
         </div>
 
-        {/* Report Sheet */}
-        <div className="card-white p-6 md:p-8 bg-white border">
-          <div className="flex items-center justify-between border-b pb-4 mb-6">
-            <div>
-              <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
-              <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Footwear Distribution</p>
-            </div>
-            <div className="text-right">
-              <h2 className="font-lora font-semibold text-lg uppercase">Sale Analysis — {GROUP_LABELS[groupMode]}</h2>
-              <p className="text-sm text-slate-700 mt-1 font-semibold uppercase">{periodLabel}</p>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4">{COLUMN_LABELS[groupMode]}</th>
-                  <th className="p-3 text-right">Total Sales (Dr)</th>
-                  <th className="p-3 text-right">Sale Returns (Cr)</th>
-                  <th className="p-3 text-right">Payment Received (Cr)</th>
-                  <th className="p-3 text-right">Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={5} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                ) : groupMode === 'customer' ? (
-                  customerRows.length === 0 ? (
-                    <tr><td colSpan={5} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
-                  ) : (
-                    customerRows.map(row => (
-                      <tr key={row.customerId} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                        <td className="p-3 pl-4 font-semibold text-slate-800">{row.customerName}</td>
-                        <td className="p-3 text-right font-bold text-rose-700">{row.totalSales > 0 ? formatCurrency(row.totalSales) : '-'}</td>
-                        <td className="p-3 text-right font-bold text-blue-700">{row.saleReturns > 0 ? formatCurrency(row.saleReturns) : '-'}</td>
-                        <td className="p-3 text-right font-bold text-emerald-700">{row.paymentReceived > 0 ? formatCurrency(row.paymentReceived) : '-'}</td>
-                        <td className="p-3 text-right font-bold text-slate-800">{formatCurrency(row.balance)}</td>
-                      </tr>
-                    ))
-                  )
-                ) : groupMode === 'region' || groupMode === 'city' ? (
-                  (groupMode === 'region' ? regionGroups : cityGroups).length === 0 ? (
-                    <tr><td colSpan={5} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
-                  ) : (
-                    (groupMode === 'region' ? regionGroups : cityGroups).map(g => {
-                      const expandedId = groupMode === 'region' ? expandedRegionId : expandedCityId;
-                      const setExpandedId = groupMode === 'region' ? setExpandedRegionId : setExpandedCityId;
-                      const isExpanded = expandedId === g.id;
-                      return (
-                        <Fragment key={String(g.id)}>
-                          <tr
-                            className="border-b bg-slate-50/60 hover:bg-slate-100/60 cursor-pointer font-semibold"
-                            style={{ borderColor: 'var(--border-table)' }}
-                            onClick={() => setExpandedId(isExpanded ? null : g.id)}
-                          >
-                            <td className="p-3 pl-4 text-slate-800 flex items-center gap-1.5">
-                              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              {g.name}
-                              <span className="text-xs font-normal text-slate-400">({g.rows.length} customers)</span>
-                            </td>
-                            <td className="p-3 text-right text-rose-700">{g.totalSales > 0 ? formatCurrency(g.totalSales) : '-'}</td>
-                            <td className="p-3 text-right text-blue-700">{g.saleReturns > 0 ? formatCurrency(g.saleReturns) : '-'}</td>
-                            <td className="p-3 text-right text-emerald-700">{g.paymentReceived > 0 ? formatCurrency(g.paymentReceived) : '-'}</td>
-                            <td className="p-3 text-right text-slate-800">{formatCurrency(g.balance)}</td>
-                          </tr>
-                          {isExpanded && g.rows.map(c => (
-                            <tr key={c.customerId} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                              <td className="p-3 pl-10 text-slate-600">{c.customerName}</td>
-                              <td className="p-3 text-right font-medium text-rose-600">{c.totalSales > 0 ? formatCurrency(c.totalSales) : '-'}</td>
-                              <td className="p-3 text-right font-medium text-blue-600">{c.saleReturns > 0 ? formatCurrency(c.saleReturns) : '-'}</td>
-                              <td className="p-3 text-right font-medium text-emerald-600">{c.paymentReceived > 0 ? formatCurrency(c.paymentReceived) : '-'}</td>
-                              <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.balance)}</td>
-                            </tr>
-                          ))}
-                        </Fragment>
-                      );
-                    })
-                  )
-                ) : (
-                  regionCityGroups.length === 0 ? (
-                    <tr><td colSpan={5} className="text-center p-8 text-slate-400">No sales activity found for this period.</td></tr>
-                  ) : (
-                    regionCityGroups.map(region => {
-                      const isRegionExpanded = expandedRegionId === region.id;
-                      return (
-                        <Fragment key={String(region.id)}>
-                          <tr
-                            className="border-b bg-slate-100/70 hover:bg-slate-200/60 cursor-pointer font-bold"
-                            style={{ borderColor: 'var(--border-table)' }}
-                            onClick={() => setExpandedRegionId(isRegionExpanded ? null : region.id)}
-                          >
-                            <td className="p-3 pl-4 text-slate-800 flex items-center gap-1.5">
-                              {isRegionExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                              {region.name}
-                              <span className="text-xs font-normal text-slate-400">({region.cities.length} cities, {region.rows.length} customers)</span>
-                            </td>
-                            <td className="p-3 text-right text-rose-700">{region.totalSales > 0 ? formatCurrency(region.totalSales) : '-'}</td>
-                            <td className="p-3 text-right text-blue-700">{region.saleReturns > 0 ? formatCurrency(region.saleReturns) : '-'}</td>
-                            <td className="p-3 text-right text-emerald-700">{region.paymentReceived > 0 ? formatCurrency(region.paymentReceived) : '-'}</td>
-                            <td className="p-3 text-right text-slate-800">{formatCurrency(region.balance)}</td>
-                          </tr>
-                          {isRegionExpanded && region.cities.map(city => {
-                            const isCityExpanded = expandedCityId === city.id;
-                            return (
-                              <Fragment key={`${region.id}-${city.id}`}>
-                                <tr
-                                  className="border-b bg-slate-50/60 hover:bg-slate-100/60 cursor-pointer font-semibold"
-                                  style={{ borderColor: 'var(--border-table)' }}
-                                  onClick={() => setExpandedCityId(isCityExpanded ? null : city.id)}
-                                >
-                                  <td className="p-3 pl-10 text-slate-700 flex items-center gap-1.5">
-                                    {isCityExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                                    {city.name}
-                                    <span className="text-xs font-normal text-slate-400">({city.rows.length} customers)</span>
-                                  </td>
-                                  <td className="p-3 text-right text-rose-700">{city.totalSales > 0 ? formatCurrency(city.totalSales) : '-'}</td>
-                                  <td className="p-3 text-right text-blue-700">{city.saleReturns > 0 ? formatCurrency(city.saleReturns) : '-'}</td>
-                                  <td className="p-3 text-right text-emerald-700">{city.paymentReceived > 0 ? formatCurrency(city.paymentReceived) : '-'}</td>
-                                  <td className="p-3 text-right text-slate-800">{formatCurrency(city.balance)}</td>
-                                </tr>
-                                {isCityExpanded && city.rows.map(c => (
-                                  <tr key={c.customerId} className="border-b" style={{ borderColor: 'var(--border-table)' }}>
-                                    <td className="p-3 pl-16 text-slate-600">{c.customerName}</td>
-                                    <td className="p-3 text-right font-medium text-rose-600">{c.totalSales > 0 ? formatCurrency(c.totalSales) : '-'}</td>
-                                    <td className="p-3 text-right font-medium text-blue-600">{c.saleReturns > 0 ? formatCurrency(c.saleReturns) : '-'}</td>
-                                    <td className="p-3 text-right font-medium text-emerald-600">{c.paymentReceived > 0 ? formatCurrency(c.paymentReceived) : '-'}</td>
-                                    <td className="p-3 text-right font-medium text-slate-700">{formatCurrency(c.balance)}</td>
-                                  </tr>
-                                ))}
-                              </Fragment>
-                            );
-                          })}
-                        </Fragment>
-                      );
-                    })
-                  )
-                )}
-              </tbody>
-              <tfoot>
-                <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td className="p-4 pl-4 text-left font-lora">GRAND TOTAL</td>
-                  <td className="p-4 text-right text-rose-800">{formatCurrency(grandTotals.totalSales)}</td>
-                  <td className="p-4 text-right text-blue-800">{formatCurrency(grandTotals.saleReturns)}</td>
-                  <td className="p-4 text-right text-emerald-800">{formatCurrency(grandTotals.paymentReceived)}</td>
-                  <td className="p-4 text-right" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(grandTotals.balance)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
+        {/* The report itself: the same document the print preview prints (Product Ledger layout,
+            per the user 2026-10-14). Region/City groups are listed fully expanded, as on paper. */}
+        <LiveReportDocument loading={loading && !hasLoadedOnce} empty={customerRows.length === 0} emptyMessage="No sales activity found for this period.">
+          {renderPrintableDocument()}
+        </LiveReportDocument>
 
       <ReportPrintPreviewModal
         isOpen={isPreviewOpen}
-        onClose={() => setIsPreviewOpen(false)}
+        onClose={() => { setIsPreviewOpen(false); closePreviewWindow(); }}
         title="Sale Analysis Report - Print Preview"
         orientation="portrait"
         onExportExcel={handleExportExcel}

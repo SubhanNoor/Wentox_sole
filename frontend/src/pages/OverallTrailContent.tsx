@@ -1,14 +1,19 @@
 import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from 'react';
+import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency } from '@/context/AppContext';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Search, ArrowLeft, ChevronRight, Filter, Eye, RotateCcw } from 'lucide-react';
+import { Search, ArrowLeft, Filter, Eye, RotateCcw } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
 import * as api from '@/lib/api';
 import type { OverallTrailRow, LedgerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { closePreviewWindow } from '@/components/reports/previewWindow';
+import LiveReportDocument from '@/components/reports/LiveReportDocument';
+import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 type AccountGroupType = 'all' | 'customer' | 'vendor' | 'employee' | 'bank' | 'chart_account' | 'business_account';
 
@@ -43,6 +48,8 @@ interface OverallTrailContentProps {
 const TAB_BY_GROUP: Record<string, string> = { all: 'overall-trail', vendor: 'vendor-balances', customer: 'customer-balances' };
 
 export default function OverallTrailContent({ initialGroup = 'all' }: OverallTrailContentProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const ownTab = TAB_BY_GROUP[initialGroup] || 'overall-trail';
   const [asOfDate, setAsOfDate] = useState(() => getWindowParam('asOfDate') || getTodayDate());
   const [searchQuery, setSearchQuery] = useState(() => getWindowParam('searchQuery') || '');
@@ -82,6 +89,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
 
   const [trailBalances, setTrailBalances] = useState<OverallTrailRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isLedgerPreviewOpen, setIsLedgerPreviewOpen] = useState(false);
 
@@ -90,9 +98,10 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
     const res = await api.reports.overallTrail({ as_of_date: asOfDate || undefined });
     if (res.ok) setTrailBalances(res.data.rows);
     setLoading(false);
+    setHasLoadedOnce(true);
   }, [asOfDate]);
 
-  useEffect(() => { loadTrail(); }, [loadTrail]);
+  useEffect(() => { loadTrail(); }, [loadTrail, dataVersion]);
 
   // Opened via the ledger drill-down's own "Show Print Preview" (per the user, 2026-09-03) — once
   // the balances arrive, re-select the same account by ba_id/ac_id and go straight into that
@@ -122,7 +131,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
   const filteredBalances = useMemo(() => {
     return trailBalances.filter(r => {
       if (selectedGroup !== 'all' && r.type !== selectedGroup) return false;
-      if (skipZero && Math.abs(r.debit - r.credit) < 0.005) return false;
+      if (skipZero && isZeroBalance(r.debit - r.credit)) return false;
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
       return (
@@ -166,7 +175,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
     setLedgerLoading(false);
   }, [selectedAccount, ledgerFromDate, ledgerToDate]);
 
-  useEffect(() => { if (selectedAccount) loadLedger(); }, [selectedAccount, loadLedger]);
+  useEffect(() => { if (selectedAccount) loadLedger(); }, [selectedAccount, loadLedger, dataVersion]);
 
   // LED-01 (changes-14-09-26.md, corrected 2026-09-15 per the client): a Purchase row with MORE
   // THAN ONE item expands into exactly N+1 rows — one per item (the first also carrying the
@@ -254,7 +263,9 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
     exportRowsToExcel(`${selectedAccount.description}-ledger-${ledgerFromDate || 'start'}-to-${ledgerToDate || 'end'}`, headers, rows);
   };
 
-  const renderPrintableDocument = () => {
+  // `interactive` is the on-screen copy only (per the user, 2026-10-14): clicking an account row opens
+  // its ledger. The preview's copy is plain.
+  const renderPrintableDocument = (interactive = false) => {
     return (
       <div className="excel-print-container">
         {/* Header */}
@@ -300,11 +311,23 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
                   </tr>
                   {/* Account rows */}
                   {groupRows.map(r => (
-                    <tr key={`${r.type}-${r.code}`}>
-                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', fontFamily: 'monospace' }}>{r.code}</td>
-                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px' }}>{r.description}</td>
-                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{r.debit > 0 ? formatCurrency(r.debit) : '-'}</td>
-                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{r.credit > 0 ? `(${formatCurrency(r.credit)})` : '-'}</td>
+                    <tr
+                      key={`${r.type}-${r.code}`}
+                      // The aggregate row stands for several accounts at once — there is no single
+                      // ledger to open, and drilling in would ask the backend for a row with
+                      // neither ba_id nor ac_id.
+                      {...(interactive && !r.is_aggregate ? {
+                        className: 'report-row-link',
+                        tabIndex: 0,
+                        title: 'Open this account\u2019s ledger',
+                        onClick: () => setSelectedAccount(r),
+                        onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter') setSelectedAccount(r); },
+                      } : {})}
+                    >
+                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', fontFamily: 'monospace', color: '#475569' }}>{r.code}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', ...(r.is_aggregate ? { fontStyle: 'italic', color: REPORT_COLORS.muted } : { fontWeight: 'bold', color: REPORT_COLORS.text }) }}>{r.description}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: r.debit > 0 ? '#047857' : REPORT_COLORS.faint }}>{r.debit > 0 ? formatCurrency(r.debit) : '-'}</td>
+                      <td style={{ border: '1px solid #000000', padding: '4px 8px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: r.credit > 0 ? '#e11d48' : REPORT_COLORS.faint }}>{r.credit > 0 ? `(${formatCurrency(r.credit)})` : '-'}</td>
                     </tr>
                   ))}
                   {/* Section subtotal — single line */}
@@ -352,7 +375,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
   };
 
   const renderPrintableLedger = () => {
-    if (!selectedAccount || !ledger) return null;
+    if (!selectedAccount) return null;
     return (
       <div className="excel-print-container">
         {/* Header */}
@@ -384,30 +407,30 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
           <tbody>
             <tr style={{ backgroundColor: '#fdf6ec', fontWeight: 'bold' }}>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>{ledgerFromDate ? `Before ${formatDate(ledgerFromDate)}` : '---'}</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>Opening Balance</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', color: '#92400e' }}>Opening Balance</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' }}>-</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontStyle: 'italic' }}>Opening Balance brought forward</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right' }}>-</td>
               <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right' }}>-</td>
-              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(ledger.opening_balance)}</td>
+              <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#78350f' }}>{formatCurrency(ledger?.opening_balance ?? 0)}</td>
             </tr>
             {expandedLedgerRows.map(row => {
               const cellPad = row.isSubRow ? '2px 6px' : '5px 6px';
               return (
               <tr key={row.key} style={row.isSubRow ? { backgroundColor: '#fafafa' } : undefined}>
-                <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px' }}>{row.date}</td>
-                <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px' }}>{row.type}</td>
-                <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', fontFamily: 'monospace' }}>{row.ref}</td>
+                <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', color: '#475569' }}>{row.date}</td>
+                <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', fontWeight: 'bold', color: REPORT_COLORS.text }}>{row.type}</td>
+                <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', fontFamily: 'monospace', color: REPORT_COLORS.muted }}>{row.ref}</td>
                 <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', color: '#000000' }}>{row.narration}</td>
                 <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
                 <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
-                <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace' }}>{row.showBalance ? formatCurrency(row.balance) : ''}</td>
+                <td style={{ border: '1px solid #000000', padding: cellPad, fontSize: '10.5px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 'bold', color: '#78350f' }}>{row.showBalance ? formatCurrency(row.balance) : ''}</td>
               </tr>
               );
             })}
             <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#e8e8e8' }}>
               <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Closing Balance</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(ledger.closing_balance)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{formatCurrency(ledger?.closing_balance ?? 0)}</td>
             </tr>
           </tbody>
         </table>
@@ -526,19 +549,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
                   {grp === 'all' ? 'All Accounts' : grp === 'customer' ? 'Customers' : grp === 'vendor' ? 'Vendors' : grp === 'employee' ? 'Employees' : grp === 'bank' ? 'Banks' : grp === 'chart_account' ? 'Chart Accounts' : 'Business Accounts'}
                 </button>
               ))}
-              {/* A single on/off option drawn as a radio — click again to turn it back off. */}
-              <button
-                type="button"
-                role="radio"
-                aria-checked={skipZero}
-                onClick={() => setSkipZero(v => !v)}
-                className="ml-2 flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold text-slate-600 rounded-md hover:bg-slate-50 cursor-pointer"
-              >
-                <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${skipZero ? 'border-[#111c2a]' : 'border-slate-300'}`}>
-                  {skipZero && <span className="w-1.5 h-1.5 rounded-full bg-[#111c2a]" />}
-                </span>
-                Skip Zero Balances
-              </button>
+              <span className="ml-2"><SkipZeroToggle value={skipZero} onChange={setSkipZero} /></span>
             </div>
           </div>
 
@@ -551,125 +562,13 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
               <p className="text-slate-500 font-semibold text-sm">Filters cleared. Use the quick filters or search above, then your report will appear.</p>
             </div>
           ) : (
-          <div className="card-white bg-white border border-slate-200/80 rounded-2xl overflow-hidden">
-            {/* Card Header */}
-            <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-start">
-              <div>
-                <h3 className="font-lora font-bold text-lg text-slate-900">Business Accounts Balances Details</h3>
-                <p className="text-xs text-slate-500 font-medium">As On Date: <span className="font-bold text-slate-700">{asOfDate ? formatDate(asOfDate) : 'Today'}</span></p>
-              </div>
-              <div className="text-right text-xs text-slate-500">
-                <p className="font-bold text-slate-800 uppercase tracking-wider">WENTOX FOOTWEAR DISTRIBUTION</p>
-                <p style={{ color: 'var(--brand-gold)' }} className="font-semibold">Overall Trial Balances Statement</p>
-              </div>
-            </div>
-
-            {/* Table — text-sm + bold numbers, matching PaymentTrailPage/ReportKhaataPage's
-                convention (per the user, 2026-09-03: this table's text/numbers read as
-                noticeably smaller/thinner than those two, once compared side by side). */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  {/* Merged header: Account Description | Trail Balances (spans Debit+Credit) */}
-                  <tr className="bg-slate-50 text-slate-700 font-bold text-xs border-b border-slate-200">
-                    <th className="p-3" style={{ width: '155px' }}>Account Code</th>
-                    <th className="p-3">Account Description</th>
-                    <th className="p-3 text-center border-l border-slate-200" colSpan={2} style={{ width: '300px' }}>Trail Balances</th>
-                  </tr>
-                  <tr className="bg-slate-50 text-slate-500 font-semibold text-xs border-b-2 border-slate-300">
-                    <th className="p-2 pl-3"></th>
-                    <th className="p-2"></th>
-                    <th className="p-2 text-right border-l border-slate-200" style={{ width: '150px' }}>Debit (Naam)</th>
-                    <th className="p-2 text-right border-l border-slate-200" style={{ width: '150px' }}>Credit (Jamma)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr><td colSpan={4} className="text-center p-8 text-slate-400 italic">Loading…</td></tr>
-                  ) : filteredBalances.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="text-center p-8 text-slate-400 italic">
-                        No account balances found for the selected filter.
-                      </td>
-                    </tr>
-                  ) : (
-                    groupedBalances.map(([groupName, groupRows]) => {
-                      const sectionDebit = groupRows.reduce((s, r) => s + r.debit, 0);
-                      const sectionCredit = groupRows.reduce((s, r) => s + r.credit, 0);
-
-                      return (
-                        <Fragment key={groupName}>
-                          {/* Section header — plain grey strip */}
-                          <tr className="bg-slate-100">
-                            <td colSpan={4} className="py-1.5 px-3 text-xs font-bold text-slate-600 uppercase tracking-widest border-y border-slate-200">
-                              {groupName}
-                            </td>
-                          </tr>
-
-                          {/* Account rows */}
-                          {groupRows.map((row, idx) => (
-                            <tr
-                              key={`${row.type}-${row.code}-${idx}`}
-                              // The aggregate row stands for several accounts at once — there is no
-                              // single ledger to open, and drilling in would ask the backend for a
-                              // row with neither ba_id nor ac_id.
-                              onClick={row.is_aggregate ? undefined : () => setSelectedAccount(row)}
-                              className={`border-b border-slate-100 transition-colors group ${
-                                row.is_aggregate
-                                  ? 'bg-slate-50/70 cursor-default'
-                                  : 'hover:bg-amber-50/30 cursor-pointer'
-                              }`}
-                            >
-                              <td className="p-2.5 pl-3 font-mono text-xs text-slate-600 whitespace-nowrap">{row.code}</td>
-                              <td className={`p-2.5 font-semibold transition-colors ${row.is_aggregate ? 'text-slate-500 italic font-normal' : 'text-slate-800 group-hover:text-[var(--brand-gold)]'}`}>
-                                <div className="flex items-center justify-between">
-                                  <span>{row.description}</span>
-                                  {!row.is_aggregate && (
-                                    <ChevronRight size={12} className="text-slate-300 opacity-0 group-hover:opacity-100 ml-2 shrink-0" />
-                                  )}
-                                </div>
-                              </td>
-                              <td className="p-2.5 text-right font-mono font-bold border-l border-slate-100">
-                                {row.debit > 0 ? <span className="text-emerald-700">{formatCurrency(row.debit)}</span> : <span className="text-slate-300 font-normal">-</span>}
-                              </td>
-                              <td className="p-2.5 text-right font-mono font-bold border-l border-slate-100">
-                                {row.credit > 0 ? <span className="text-rose-700">({formatCurrency(row.credit)})</span> : <span className="text-slate-300 font-normal">-</span>}
-                              </td>
-                            </tr>
-                          ))}
-
-                          {/* Subtotal — single summary line at end of section */}
-                          <tr className="border-t border-slate-400 bg-slate-50">
-                            <td colSpan={2} className="py-2 px-3 text-xs font-bold text-slate-600 uppercase tracking-wider">
-                              Subtotal for {groupName} ({groupRows.length} accounts):
-                            </td>
-                            <td className="py-2 px-2.5 text-right font-mono font-bold text-emerald-700 border-l border-slate-200">
-                              {sectionDebit > 0 ? formatCurrency(sectionDebit) : '-'}
-                            </td>
-                            <td className="py-2 px-2.5 text-right font-mono font-bold text-rose-700 border-l border-slate-200">
-                              {sectionCredit > 0 ? `(${formatCurrency(sectionCredit)})` : '-'}
-                            </td>
-                          </tr>
-                        </Fragment>
-                      );
-                    })
-                  )}
-                </tbody>
-                <tfoot>
-                  {/* White/light bar, not the dark navy fill — it was the bar's own background
-                      that made the numbers hard to read, not the number colors (per the user,
-                      2026-09-03). Matches the light bg-slate-50 "Grand Total" row style used
-                      elsewhere in the app (Sale Analysis, Vendor Report). Debit green / credit red
-                      per the app-wide convention (per the user, 2026-09-04). */}
-                  <tr className="border-t-2 border-slate-300 bg-slate-50 font-bold text-slate-700 text-sm">
-                    <td colSpan={2} className="p-3 uppercase tracking-wider text-right font-lora" style={{ color: 'var(--brand-navy)' }}>Grand Total Trail Balances</td>
-                    <td className="p-3 text-right font-mono border-l border-slate-200 text-emerald-700">{formatCurrency(filteredTotals.totalDebit)}</td>
-                    <td className="p-3 text-right font-mono border-l border-slate-200 text-rose-700">({formatCurrency(filteredTotals.totalCredit)})</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
+          <>
+            <p className="text-xs text-slate-500 mb-2" data-no-print>Click an account to open its ledger.</p>
+            {/* The report: the same document the print preview prints (Product Ledger layout, per the user 2026-10-14). */}
+            <LiveReportDocument loading={loading && !hasLoadedOnce} empty={hasLoadedOnce && filteredBalances.length === 0} emptyMessage="No account balances found for the selected filter.">
+              {renderPrintableDocument(true)}
+            </LiveReportDocument>
+          </>
           )}
         </div>
       ) : (
@@ -754,77 +653,16 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
             </div>
           </div>
 
-          {/* Detailed Ledger Table */}
-          <div className="card-white p-6 md:p-8 bg-white border">
-            <div className="border-b pb-4 mb-6 flex justify-between items-start">
-              <div>
-                <h3 className="font-lora font-bold text-lg text-slate-900">{selectedAccount.description} Account Statement</h3>
-                <p className="text-xs text-slate-500">Period: {ledgerFromDate ? formatDate(ledgerFromDate) : 'Start'} to {ledgerToDate ? formatDate(ledgerToDate) : 'End'}</p>
-              </div>
-              <div className="text-right text-xs text-slate-500">
-                <p className="font-bold text-slate-800">WENTOX FOOTWEAR DISTRIBUTION</p>
-                <p>Account Ledger Statement</p>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-sm">
-                <thead>
-                  <tr className="bg-slate-100 border-b text-slate-700 font-bold text-xs uppercase tracking-wider" style={{ borderColor: 'var(--border-color)' }}>
-                    <th className="p-3">Date</th>
-                    <th className="p-3">Transaction Type</th>
-                    <th className="p-3">Reference / Bill #</th>
-                    <th className="p-3">Description / Narration</th>
-                    <th className="p-3 text-right">Debit (PKR)</th>
-                    <th className="p-3 text-right">Credit (PKR)</th>
-                    <th className="p-3 text-right whitespace-nowrap" style={{ minWidth: '110px' }}>Balance (PKR)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b bg-amber-50/40 font-semibold text-slate-700" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 text-slate-500">{ledgerFromDate ? `Before ${formatDate(ledgerFromDate)}` : '---'}</td>
-                    <td className="p-3 font-bold text-amber-800">Opening Balance</td>
-                    <td className="p-3">-</td>
-                    <td className="p-3 italic text-slate-500">Opening Balance brought forward</td>
-                    <td className="p-3 text-right">0</td>
-                    <td className="p-3 text-right">0</td>
-                    <td className="p-3 text-right font-bold text-amber-900">{formatCurrency(ledger?.opening_balance || 0)}</td>
-                  </tr>
-
-                  {ledgerLoading ? (
-                    <tr><td colSpan={7} className="text-center p-6 text-slate-400 italic">Loading…</td></tr>
-                  ) : !ledger || ledger.rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="text-center p-6 text-slate-400 italic">
-                        No ledger transactions found for this date range.
-                      </td>
-                    </tr>
-                  ) : (
-                    expandedLedgerRows.map((row) => {
-                      const cellV = row.isSubRow ? 'py-1' : 'py-3';
-                      return (
-                      <tr key={row.key} className={`border-b hover:bg-slate-50/60 transition-colors ${row.isSubRow ? 'bg-slate-50/40' : ''}`} style={{ borderColor: 'var(--border-table)' }}>
-                        <td className={`px-3 font-medium text-slate-600 ${cellV}`}>{row.date}</td>
-                        <td className={`px-3 font-semibold text-slate-800 ${cellV}`}>{row.type}</td>
-                        <td className={`px-3 text-slate-500 font-mono ${cellV}`}>{row.ref}</td>
-                        <td className={`px-3 text-slate-900 ${cellV}`}>{row.narration}</td>
-                        <td className={`px-3 text-right font-semibold text-emerald-700 ${cellV}`}>{row.debit > 0 ? formatCurrency(row.debit) : '-'}</td>
-                        <td className={`px-3 text-right font-semibold text-rose-700 ${cellV}`}>{row.credit > 0 ? `(${formatCurrency(row.credit)})` : '-'}</td>
-                        <td className={`px-3 text-right font-bold text-amber-900 ${cellV}`}>{row.showBalance ? formatCurrency(row.balance) : ''}</td>
-                      </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          {/* The ledger: the same document the print preview prints. */}
+          <LiveReportDocument loading={!ledger && ledgerLoading}>
+            {renderPrintableLedger()}
+          </LiveReportDocument>
         </div>
       )}
 
       <ReportPrintPreviewModal
         isOpen={isPreviewOpen}
-        onClose={() => setIsPreviewOpen(false)}
+        onClose={() => { setIsPreviewOpen(false); closePreviewWindow(); }}
         title="Overall Trial Balance - Print Preview"
         orientation="portrait"
         onExportExcel={handleExportExcel}
@@ -834,7 +672,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
 
       <ReportPrintPreviewModal
         isOpen={isLedgerPreviewOpen}
-        onClose={() => setIsLedgerPreviewOpen(false)}
+        onClose={() => { setIsLedgerPreviewOpen(false); closePreviewWindow(); }}
         title={selectedAccount ? `${selectedAccount.description} — Account Ledger` : 'Account Ledger'}
         orientation="portrait"
         onExportExcel={handleExportExcelLedger}

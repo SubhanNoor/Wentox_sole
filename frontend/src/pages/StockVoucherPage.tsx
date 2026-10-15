@@ -22,6 +22,7 @@ import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 /**
  * Stock Voucher — a manual "add stock" document (legacy Journal Entry-style bound-record screen,
@@ -90,6 +91,8 @@ function emptyEntry(): EntryLine {
 }
 
 export default function StockVoucherPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
   // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
@@ -201,7 +204,7 @@ export default function StockVoucherPage() {
       if (data && data.length === 0 && isPosted) resetToNewVoucher();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshUnposted]);
+  }, [refreshUnposted, dataVersion]);
 
   useEffect(() => {
     const t = setTimeout(refresh, 250);
@@ -245,7 +248,7 @@ export default function StockVoucherPage() {
   const [status, setStatus] = usePersistentField<'CONFIRMED' | 'DRAFT'>('stock-voucher', 'status', 'DRAFT');
   // Refetches whenever the open voucher changes (New/loading a different one) — this voucher's own
   // id is excluded, since its lines are accounted for separately, client-side, from `lines` itself.
-  useEffect(() => { refreshUnpostedReservations(svId); }, [svId, refreshUnpostedReservations]);
+  useEffect(() => { refreshUnpostedReservations(svId); }, [svId, refreshUnpostedReservations, dataVersion]);
   // Master/Detail edit-scope radio, per the user 2026-08-31: with a voucher already unlocked via
   // the toolbar's Edit, this further splits WHICH half becomes editable — the header (Master) or
   // the entry strip/grid (Detail), never both at once. Only bites once mode is actually 'edit';
@@ -1035,7 +1038,7 @@ export default function StockVoucherPage() {
     return res.ok ? res.data : null;
   }, []);
 
-  useEffect(() => { refreshNav(); }, [refreshNav]);
+  useEffect(() => { refreshNav(); }, [refreshNav, dataVersion]);
 
   const navPostedList = useMemo(
     () => [...navVouchers].filter(v => v.status === 'CONFIRMED').reverse(),
@@ -1131,7 +1134,7 @@ export default function StockVoucherPage() {
     const res = await api.stockVouchers.listDeletedNumbers();
     if (res.ok) setDeletedNumbers(res.data);
   }, []);
-  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers, dataVersion]);
 
   // Preview of the Number a brand-new voucher will get: the highest number in use, live or
   // deleted, + 1. Only a preview — the real one comes from dbo.seq_stock_voucher_no at first Save.

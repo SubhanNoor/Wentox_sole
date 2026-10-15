@@ -6,8 +6,11 @@ import type { UserAccountRow } from '@/lib/api';
 import { UserPlus, Lock, User, ShieldCheck, UsersRound, UserX, UserCheck, KeyRound, X, Save } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function UserManagementPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const { state } = useApp();
   const [users, setUsers] = useState<UserAccountRow[]>([]);
 
@@ -36,7 +39,7 @@ export default function UserManagementPage() {
     if (res.ok) setUsers(res.data);
   }, []);
 
-  useEffect(() => { loadUsers(); }, [loadUsers]);
+  useEffect(() => { loadUsers(); }, [loadUsers, dataVersion]);
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();

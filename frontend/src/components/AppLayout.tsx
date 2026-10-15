@@ -7,9 +7,11 @@ import {
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
 import ZoomControl from '@/components/ZoomControl';
+import OpenWindowsMenu from '@/components/OpenWindowsMenu';
 import MenuBar from '@/components/MenuBar';
 import { FIELD_SELECTOR, fieldsIn, findSubmitButton, blockIfRequiredEmpty } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
+import { findVisiblePreviewButton } from '@/lib/toolbarShortcuts';
 
 // Navigation moved out of this file entirely: the five hover menus and their page mapping live in
 // MenuBar.tsx as MENU_GROUPS. The sidebar's NavItem/NavSection/navSections went with it.
@@ -139,6 +141,14 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   // MenuBar does its own role filtering, and a dropdown that opens fresh each time has no scroll
   // position to remember.
 
+  // A child window is titled by its own page (and sub-tab), not just "Wentox" — Electron mirrors
+  // document.title onto the window, so it names the window in the taskbar and in the main window's
+  // Open Windows list (OpenWindowsMenu.tsx).
+  useEffect(() => {
+    if (!IS_CHILD_WINDOW) return;
+    document.title = subTabTitle && subTabTitle !== pageTitle ? `${pageTitle} — ${subTabTitle}` : pageTitle;
+  }, [pageTitle, subTabTitle]);
+
   useEffect(() => {
     function onClick(e: MouseEvent) {
       if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
@@ -157,10 +167,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!e.altKey || e.key.toLowerCase() !== 'v') return;
-      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('button'));
-      const target = buttons.find(
-        (b) => !b.disabled && b.offsetParent !== null && b.textContent?.trim().includes('Show Print Preview')
-      );
+      const target = findVisiblePreviewButton();
       if (target) {
         e.preventDefault();
         target.click();
@@ -476,6 +483,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
 
           <div className="flex items-center gap-3 flex-shrink-0 ml-auto">
             <ZoomControl />
+            <OpenWindowsMenu />
             <NotificationBell />
 
           {/* The user chip — and with it Settings and Log out — used to sit in the sidebar footer.

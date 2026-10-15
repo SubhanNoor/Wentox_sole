@@ -4,6 +4,7 @@ import * as api from '@/lib/api';
 import type { ReceiptRow, BusinessAccountRow, ReceiptVoucherRow, SettlementRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, Undo2, ArrowLeftRight } from 'lucide-react';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface MonthlyReceiptsTabProps {
   /** Called after a successful Unpost here — the parent (ReceiptsPage) switches back to Receipt
@@ -20,6 +21,8 @@ interface MonthlyReceiptsTabProps {
 }
 
 export default function MonthlyReceiptsTab({ onVoucherUnposted, onSettlementUnposted }: MonthlyReceiptsTabProps) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [accounts, setAccounts] = useState<BusinessAccountRow[]>([]);
   // Voucher headers (voucher_no, remarks, status) — the outer table now groups by VOUCHER, not
@@ -47,7 +50,7 @@ export default function MonthlyReceiptsTab({ onVoucherUnposted, onSettlementUnpo
     if (s.ok) setSettlements(s.data);
   };
 
-  useEffect(() => { refreshAll(); }, []);
+  useEffect(() => { refreshAll(); }, [dataVersion]);
 
   const voucherLookup = useMemo(() => new Map(vouchers.map(v => [v.voucher_id, v])), [vouchers]);
 

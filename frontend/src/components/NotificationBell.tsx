@@ -4,10 +4,13 @@ import * as api from '@/lib/api';
 import type { AlertRow } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Bell, X, RotateCw } from 'lucide-react';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 const POLL_INTERVAL_MS = 60_000;
 
 export default function NotificationBell() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const { dispatch } = useApp();
   const [open, setOpen] = useState(false);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
@@ -23,7 +26,7 @@ export default function NotificationBell() {
     load();
     const id = setInterval(load, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, dataVersion]);
 
   async function handleRefresh() {
     setRefreshing(true);

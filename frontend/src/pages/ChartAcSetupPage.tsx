@@ -16,8 +16,11 @@ import {
 } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function ChartAcSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [charts, setCharts] = useState<ChartOfAccountRow[]>([]);
   const [groups, setGroups] = useState<GroupAccountRow[]>([]);
   const [viewingChildBizAccounts, setViewingChildBizAccounts] = useState<BusinessAccountRow[]>([]);
@@ -63,7 +66,7 @@ export default function ChartAcSetupPage() {
     if (gRes.ok) setGroups(gRes.data);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, dataVersion]);
 
   const handleOpenAddModal = () => {
     setSelectedId(null);

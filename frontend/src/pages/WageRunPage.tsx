@@ -10,6 +10,7 @@ import SearchModal from '@/components/SearchModal';
 import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, X } from 'lucide-react';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import CartonsInput from '@/components/CartonsInput';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface FormItem {
   key: string;
@@ -28,6 +29,8 @@ function emptyItem(): FormItem {
 const today = () => new Date().toISOString().split('T')[0];
 
 export default function WageRunPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [workers, setWorkers] = useState<EmployeeRow[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [stageList, setStageList] = useState<StageRow[]>([]);
@@ -102,8 +105,8 @@ export default function WageRunPage() {
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
-  const loadAll = useCallback(async () => {
-    setLoading(true);
+  const loadAll = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     const [empRes, prodRes, stageRes, runRes, exRes] = await Promise.all([
       api.employees.list({ employee_type: 'WORKER' }),
       api.listProducts(),
@@ -120,6 +123,9 @@ export default function WageRunPage() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+  // Live update (per the user, 2026-10-15): another window's save reloads the lists quietly — no
+  // "Loading…" swap, and the typed rows live in their own state, so nothing being entered is lost.
+  useEffect(() => { if (dataVersion > 0) Promise.resolve().then(() => loadAll(true)); }, [dataVersion, loadAll]);
 
   const workerOptions = useMemo(
     () => workers.map(w => ({ value: String(w.employee_id), label: w.name })),
@@ -248,7 +254,7 @@ export default function WageRunPage() {
       setRecentRuns(res.ok ? res.data.filter(r => r.wage_run_id !== editingRunId) : []);
     });
     return () => { cancelled = true; };
-  }, [employeeId, stage, editingRunId]);
+  }, [employeeId, stage, editingRunId, dataVersion]);
 
   const zeroRateRows = filledItems.filter(it => Number(it.rate) === 0);
 

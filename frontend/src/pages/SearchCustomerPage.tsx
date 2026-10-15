@@ -9,6 +9,7 @@ import type { SaleBillRow, CustomerRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 type QuickFilter = 'all' | 'no-adda' | 'no-bilty' | 'no-gp' | 'complete';
 
@@ -23,6 +24,8 @@ const QUICK_FILTERS: { id: QuickFilter; label: string }[] = [
 const isMissing = (v: string | null | undefined) => !v || !v.trim();
 
 export default function SearchCustomerPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [customerId, setCustomerId] = useState(() => getWindowParam('customerId') || '');
   const [dateFrom, setDateFrom] = useState(() => getWindowParam('dateFrom') || getThreeMonthsAgoDate());
@@ -42,7 +45,7 @@ export default function SearchCustomerPage() {
 
   useEffect(() => {
     api.customers.list({ includeInactive: false }).then(r => { if (r.ok) setCustomers(r.data); });
-  }, []);
+  }, [dataVersion]);
 
   const loadBills = useCallback(async () => {
     if (!customerId) { setBills([]); return; }
@@ -58,7 +61,7 @@ export default function SearchCustomerPage() {
     setHasLoadedOnce(true);
   }, [customerId, dateFrom, dateTo]);
 
-  useEffect(() => { loadBills(); }, [loadBills]);
+  useEffect(() => { loadBills(); }, [loadBills, dataVersion]);
 
   // "Show Print Preview" opens a new window on this same customer's filtered bills (per the user,
   // 2026-09-03), instead of an in-page overlay.

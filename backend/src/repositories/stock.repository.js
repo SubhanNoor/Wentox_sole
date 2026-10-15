@@ -100,6 +100,14 @@ async function currentStock(filters = {}) {
     params.categoryId = { type: sql.Int, value: filters.category_id };
   }
 
+  // As on a date (per the user, 2026-10-15): only movements up to that day count. In the JOIN, not
+  // the WHERE, so a colour with no movements by then still lists with 0.
+  let asOfJoin = '';
+  if (filters.as_of_date) {
+    asOfJoin = 'AND sm.movement_date <= @asOfDate';
+    params.asOfDate = { type: sql.Date, value: filters.as_of_date };
+  }
+
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
     `SELECT
@@ -109,7 +117,7 @@ async function currentStock(filters = {}) {
      FROM dbo.article_colors ac
      JOIN dbo.articles a ON a.article_id = ac.article_id
      JOIN dbo.product_categories c ON c.category_id = a.category_id
-     LEFT JOIN dbo.stock_movements sm ON sm.variant_id = ac.variant_id
+     LEFT JOIN dbo.stock_movements sm ON sm.variant_id = ac.variant_id ${asOfJoin}
      ${where}
      GROUP BY ac.variant_id, ac.color, a.article_id, a.code, a.name, c.name,
               COALESCE(ac.packing, a.packing)

@@ -8,13 +8,20 @@ import * as api from '@/lib/api';
 import type { PaymentTrailResult } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
+import { closePreviewWindow } from '@/components/reports/previewWindow';
+import LiveReportDocument from '@/components/reports/LiveReportDocument';
+import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export function PaymentTrailContent() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   const [result, setResult] = useState<PaymentTrailResult>({ buckets: [], grand_total: 0 });
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   // G-03 (changes-14-09-26.md): the cursor lands in the first field (From date) on open.
@@ -26,9 +33,10 @@ export function PaymentTrailContent() {
     const res = await api.reports.paymentTrail({ date_from: fromDate || undefined, date_to: toDate || undefined });
     if (res.ok) setResult(res.data);
     setLoading(false);
+    setHasLoadedOnce(true);
   }, [fromDate, toDate]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, dataVersion]);
 
   // "Show Print Preview" opens a new window landing on this same filtered report (per the user,
   // 2026-09-03), instead of an in-page overlay.
@@ -76,12 +84,12 @@ export function PaymentTrailContent() {
             {result.buckets.map(bucket => (
               <tr key={bucket.key}>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{bucket.label}</td>
-                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{bucket.total > 0 ? formatCurrency(bucket.total) : '-'}</td>
+                <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: REPORT_COLORS.out }}>{bucket.total > 0 ? formatCurrency(bucket.total) : '-'}</td>
               </tr>
             ))}
             <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL (AMOUNTS PAID)</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }}>{formatCurrency(result.grand_total)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{formatCurrency(result.grand_total)}</td>
             </tr>
           </tbody>
         </table>
@@ -136,52 +144,14 @@ export function PaymentTrailContent() {
           </div>
         </div>
 
-        {/* Report Sheet */}
-        <div className="card-white p-6 md:p-8 bg-white border">
-          <div className="flex items-center justify-between border-b pb-4 mb-6">
-            <div>
-              <h1 className="font-lora font-bold text-2xl" style={{ color: 'var(--brand-navy)' }}>WENTOX</h1>
-              <p className="text-xs uppercase tracking-widest text-slate-500 font-inter">Footwear Distribution</p>
-            </div>
-            <div className="text-right">
-              <h2 className="font-lora font-semibold text-lg uppercase">Payment Trail</h2>
-              {(fromDate || toDate) && (
-                <p className="text-xs text-amber-700 font-semibold mt-0.5">Period: {fromDate ? formatDate(fromDate) : 'Start'} to {toDate ? formatDate(toDate) : 'End'}</p>
-              )}
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
-                  <th className="p-3 pl-4">Account Title</th>
-                  <th className="p-3 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr><td colSpan={2} className="text-center p-8 text-slate-400">Loading…</td></tr>
-                ) : result.buckets.map(bucket => (
-                  <tr key={bucket.key} className="border-b hover:bg-slate-50/50" style={{ borderColor: 'var(--border-table)' }}>
-                    <td className="p-3 pl-4 font-semibold text-slate-800">{bucket.label}</td>
-                    <td className="p-3 text-right font-bold text-rose-700">{bucket.total > 0 ? formatCurrency(bucket.total) : '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="bg-slate-50 font-bold border-t-2 text-slate-700" style={{ borderColor: 'var(--border-color)' }}>
-                  <td className="p-4 pl-4 text-left font-lora">GRAND TOTAL (Amounts Paid)</td>
-                  <td className="p-4 text-right text-lg" style={{ color: 'var(--brand-gold)' }}>{formatCurrency(result.grand_total)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
+        {/* The report: the same document the print preview prints (Product Ledger layout, per the user 2026-10-14). */}
+        <LiveReportDocument loading={loading && !hasLoadedOnce}>
+          {renderPrintableDocument()}
+        </LiveReportDocument>
 
         <ReportPrintPreviewModal
           isOpen={isPreviewOpen}
-          onClose={() => setIsPreviewOpen(false)}
+          onClose={() => { setIsPreviewOpen(false); closePreviewWindow(); }}
           title="Payment Trail Report - Print Preview"
           orientation="portrait"
           onExportExcel={handleExportExcel}

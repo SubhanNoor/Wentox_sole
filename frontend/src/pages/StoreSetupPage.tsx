@@ -6,8 +6,11 @@ import DuplicateNamePromptModal, { type DuplicateNameMatch } from '@/components/
 import { stores as storesApi, type StoreRow } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function StoreSetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [stores, setStores] = useState<StoreRow[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -32,7 +35,7 @@ export default function StoreSetupPage() {
     if (res.ok) setStores(res.data);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, dataVersion]);
 
   const handleOpenAddModal = () => {
     setSelectedStoreId(null);

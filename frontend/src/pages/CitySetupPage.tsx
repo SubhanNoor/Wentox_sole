@@ -7,8 +7,11 @@ import SearchableSelect from '@/components/SearchableSelect';
 import { cities as citiesApi, listRegions, type CityRow, type RegionRow } from '@/lib/api';
 import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 export default function CitySetupPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [cities, setCities] = useState<CityRow[]>([]);
   const [regions, setRegions] = useState<RegionRow[]>([]);
   const [citySearch, setCitySearch] = useState('');
@@ -41,7 +44,7 @@ export default function CitySetupPage() {
     if (rRes.ok) setRegions(rRes.data);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData, dataVersion]);
 
   const handleOpenAddModal = () => {
     setSelectedCityId(null);

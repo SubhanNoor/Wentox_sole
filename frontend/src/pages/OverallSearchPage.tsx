@@ -10,6 +10,7 @@ import type { OverallDirectoryRow, OverallEntityType, LedgerRow } from '@/lib/ap
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 type EntityType = 'customer' | 'vendor' | 'employee' | 'subcustomer' | 'account' | 'bank';
 
@@ -34,6 +35,8 @@ interface PersonEntity {
 }
 
 export default function OverallSearchPage() {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   const [searchQuery, setSearchQuery] = useState('');
   const [entityFilter, setEntityFilter] = useState<'all' | EntityType>('all');
   const [selectedPerson, setSelectedPerson] = useState<PersonEntity | null>(null);
@@ -65,7 +68,7 @@ export default function OverallSearchPage() {
     setLoading(false);
   }, [searchQuery]);
 
-  useEffect(() => { loadDirectory(); }, [loadDirectory]);
+  useEffect(() => { loadDirectory(); }, [loadDirectory, dataVersion]);
 
   const allPeople = useMemo<PersonEntity[]>(() => {
     return directory.map(d => {
@@ -115,7 +118,7 @@ export default function OverallSearchPage() {
     setLedgerLoading(false);
   }, [selectedPerson, fromDate, toDate]);
 
-  useEffect(() => { if (selectedPerson) loadLedger(); }, [selectedPerson, loadLedger]);
+  useEffect(() => { if (selectedPerson) loadLedger(); }, [selectedPerson, loadLedger, dataVersion]);
 
   // "Show Print Preview" opens a new window on this same person's ledger (per the user,
   // 2026-09-03), instead of an in-page overlay.

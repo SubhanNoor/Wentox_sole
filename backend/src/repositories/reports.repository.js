@@ -48,10 +48,9 @@ async function productionLog(filters = {}) {
 // type (PRODUCTION, SALE, SALE_RETURN, OPENING, ADJUSTMENT), plus a company/vendor filter
 // (a.vendor_id) that productionLog() never needed. Debit(IN)/Credit(OUT) split happens in the
 // service — this just returns the signed qty_pairs rows, same as stock.repository.js#movements().
-async function productLedger(filters = {}) {
-  const conditions = [];
-  const params = {};
-
+// Product filters shared by the ledger rows and their opening balances, so both always cover the
+// exact same set of products.
+function productLedgerArticleConditions(filters, conditions, params) {
   if (filters.article_id) {
     conditions.push('a.article_id = @articleId');
     params.articleId = { type: sql.Int, value: filters.article_id };
@@ -68,6 +67,12 @@ async function productLedger(filters = {}) {
     conditions.push('(a.name LIKE @search OR a.code LIKE @search)');
     params.search = { type: sql.NVarChar(150), value: `%${filters.search}%` };
   }
+}
+
+async function productLedger(filters = {}) {
+  const conditions = [];
+  const params = {};
+  productLedgerArticleConditions(filters, conditions, params);
   if (filters.date_from) {
     conditions.push('sm.movement_date >= @dateFrom');
     params.dateFrom = { type: sql.Date, value: filters.date_from };
@@ -93,13 +98,44 @@ async function productLedger(filters = {}) {
   return result.recordset;
 }
 
+// Each product+colour's stock just before `date_from` (the Product Ledger's Opening column) — the
+// signed sum of every movement dated earlier. Only variants with a non-zero opening come back; the
+// service adds the ones whose first movement falls inside the period at an opening of 0.
+async function productLedgerOpening(filters = {}) {
+  if (!filters.date_from) return [];
+  const conditions = ['sm.movement_date < @dateFrom'];
+  const params = { dateFrom: { type: sql.Date, value: filters.date_from } };
+  productLedgerArticleConditions(filters, conditions, params);
+  const result = await query(
+    `SELECT sm.variant_id, ac.color, a.article_id, a.code AS article_code, a.name AS article_name,
+            c.name AS category_name, v.name AS vendor_name, SUM(sm.qty_pairs) AS opening
+     FROM dbo.stock_movements sm
+     JOIN dbo.article_colors ac ON ac.variant_id = sm.variant_id
+     JOIN dbo.articles a ON a.article_id = ac.article_id
+     JOIN dbo.product_categories c ON c.category_id = a.category_id
+     JOIN dbo.vendors v ON v.vendor_id = a.vendor_id
+     WHERE ${conditions.join(' AND ')}
+     GROUP BY sm.variant_id, ac.color, a.article_id, a.code, a.name, c.name, v.name
+     HAVING SUM(sm.qty_pairs) <> 0`,
+    params,
+  );
+  return result.recordset;
+}
+
 // UC-30 Vendor Stock — on-hand raw material per vendor+material+unit, purchases in minus returns/
 // consumption out, plus the purchased/returned breakdown the frontend's Material Stock tab shows
 // (movement_type is a real CHECK-constrained discriminator on this table, sign-constrained per
 // type — PURCHASE_RETURN rows are negative, flipped here for a positive "returned" figure). No
 // HAVING filter: a material that was purchased and fully consumed (on_hand = 0) still has real
 // purchased/returned history the breakdown view needs to show.
-async function vendorStock() {
+// As on a date (per the user, 2026-10-15): only movements up to that day; omitted = everything.
+async function vendorStock(filters = {}) {
+  const params = {};
+  let where = '';
+  if (filters.as_of_date) {
+    where = 'WHERE vsm.movement_date <= @asOfDate';
+    params.asOfDate = { type: sql.Date, value: filters.as_of_date };
+  }
   const result = await query(
     `SELECT v.vendor_id, v.name AS vendor_name, m.material_id, m.name AS material_name, vsm.unit,
             SUM(CASE WHEN vsm.movement_type = 'PURCHASE' THEN vsm.qty ELSE 0 END) AS purchased_qty,
@@ -108,8 +144,10 @@ async function vendorStock() {
      FROM dbo.vendor_stock_movements AS vsm
      JOIN dbo.vendors   AS v ON v.vendor_id   = vsm.vendor_id
      JOIN dbo.materials AS m ON m.material_id = vsm.material_id
+     ${where}
      GROUP BY v.vendor_id, v.name, m.material_id, m.name, vsm.unit
      ORDER BY v.name, m.name`,
+    params,
   );
   return result.recordset;
 }
@@ -353,13 +391,16 @@ async function saleAggregateByCustomer(filters = {}) {
 
   const result = await query(
     `SELECT
-       c.customer_id, c.name AS customer_name, c.region_id, r.name AS region_name,
+       c.customer_id, c.ba_id, c.name AS customer_name, c.region_id, r.name AS region_name,
        c.city_id, ci.name AS city_name,
        ISNULL(sb.total_sales, 0) AS total_sales, ISNULL(sb.total_cartons, 0) AS total_cartons,
        ISNULL(sr.total_returns, 0) AS total_returns,
        ISNULL(rc.total_payment, 0) + ISNULL(st.total_settled, 0) AS total_payment,
        ISNULL(rc.total_commission, 0) AS total_commission,
-       ISNULL(jv.total_jv, 0) AS total_jv
+       ISNULL(jv.total_jv, 0) AS total_jv,
+       CASE WHEN sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL
+              OR rc.total_payment IS NOT NULL OR st.total_settled IS NOT NULL
+              OR jv.total_jv IS NOT NULL THEN 1 ELSE 0 END AS has_activity
      FROM dbo.customers c
      JOIN dbo.regions r ON r.region_id = c.region_id
      LEFT JOIN dbo.cities ci ON ci.city_id = c.city_id
@@ -394,9 +435,8 @@ async function saleAggregateByCustomer(filters = {}) {
        JOIN dbo.journal_vouchers h ON h.jv_id = jvl.jv_id
        ${jvWhere} GROUP BY jvl.ba_id
      ) jv ON jv.ba_id = c.ba_id
-     WHERE sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL
-        OR rc.total_payment IS NOT NULL OR st.total_settled IS NOT NULL
-        OR jv.total_jv IS NOT NULL
+     -- EVERY customer, flagged with has_activity: the service also keeps the idle ones that still
+     -- carry a balance (per the user, 2026-10-14), which only the ledger balance can tell.
      ORDER BY r.name, ci.name, c.name`,
     params,
   );
@@ -460,7 +500,7 @@ async function vendorReportRows(filters = {}) {
   const vendorFilter = filters.vendor_id ? 'WHERE v.vendor_id = @vendorId' : '';
   const result = await query(
     `SELECT
-       v.vendor_id, v.name AS vendor_name,
+       v.vendor_id, v.ba_id, v.name AS vendor_name,
        ISNULL(p.total_purchase, 0) AS total_purchase,
        ISNULL(pr.total_return, 0) AS total_return,
        ISNULL(ex.total_expense_payment, 0) + ISNULL(al.total_alloc_payment, 0)
@@ -875,6 +915,7 @@ async function overallDirectory(searchQuery, entityType) {
 module.exports = {
   productionLog,
   productLedger,
+  productLedgerOpening,
   vendorStock,
   ledgerRows,
   netBalance,

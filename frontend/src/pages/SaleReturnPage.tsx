@@ -32,6 +32,7 @@ import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
 import { getWindowParam } from '@/lib/windowParams';
+import { useDataVersion } from '@/hooks/useDataVersion';
 
 interface UiItem {
   uid: string;
@@ -75,6 +76,8 @@ function recalcItem(item: UiItem): UiItem {
 }
 
 export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?: 'return' | 'weekly' | 'monthly' | 'overall' | 'find' }) {
+  // Re-runs the loads below when another window saves something (live update, 2026-10-15).
+  const dataVersion = useDataVersion();
   // New button + "cursor waits on New" (per the user, 2026-09-18): after a Post / Post All, and
   // whenever the form drops to the locked blank (useNewDocGate's awaitingNew), focus goes to New so
   // Enter starts the next document. Two frames, so a reset's own focus-first-field attempt (queued
@@ -122,7 +125,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
       if (baRes.ok) setBusinessAccounts(baRes.data);
       if (failures.length) setLookupError('Failed to load lookup data: ' + failures.join('; '));
     })();
-  }, []);
+  }, [dataVersion]);
 
   const refreshStock = useCallback(async () => {
     const res = await api.reports.stock();
@@ -433,7 +436,7 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     const res = await api.draftSaleReturns.listDeletedNumbers();
     if (res.ok) setDeletedNumbers(res.data);
   }, []);
-  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers]);
+  useEffect(() => { refreshDeletedNumbers(); }, [refreshDeletedNumbers, dataVersion]);
 
 
   const loadReturnRow = async (rowIn: SaleReturnRow) => {
@@ -510,7 +513,12 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     return res.ok ? res.data : null;
   }, []);
 
-  useEffect(() => { refreshPostedReturns(); }, [refreshPostedReturns]);
+  // When another window saves (dataVersion > 0), the Unposted list refreshes here too — only the
+  // list, not the open-on-load effect above, which can reset the screen to a new return.
+  useEffect(() => {
+    refreshPostedReturns();
+    if (dataVersion > 0) refreshDrafts();
+  }, [refreshPostedReturns, refreshDrafts, dataVersion]);
 
   // Sorted by system_no (creation order), not the shared list()'s own date-based ORDER BY — see
   // SaleBillPage.tsx's navPostedList for why (a backdated document's date can otherwise put it
