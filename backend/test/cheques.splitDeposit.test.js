@@ -98,7 +98,15 @@ test('cheques: bouncing a cheque split across two banks reverses EACH deposit ag
     amount: 6000, bank_id: bankB.bank_id, allocation_date: '2026-01-12',
   }, null, undefined);
 
-  const bounced = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-20' }, null);
+  // One bounce = one step back: only the LATEST deposit (bank B, 12th) is undone, the first stays.
+  const firstBounce = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-20' }, null);
+  assert.equal(firstBounce.cheque_status, 'PARTIALLY_ENDORSED');
+  let rows = await allocationRowsFor(receiptId);
+  assert.deepEqual(rows.map((a) => a.status), ['ACTIVE', 'REVERSED']);
+
+  // The next bounce undoes the earlier deposit; the one after that reverses the receipt itself.
+  await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-21' }, null);
+  const bounced = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-22' }, null);
   assert.equal(bounced.cheque_status, 'BOUNCED');
 
   const allocations = await allocationRowsFor(receiptId);

@@ -71,6 +71,12 @@ module.exports = function register() {
     return service.reverseAllocation(payload.id, payload, session.userId);
   }));
 
+  // Cheque Return page's Mark Bounced — undoes ONE allocation as a bounce (one step back).
+  ipcMain.handle('cheques:bounce-allocation', wrap((payload) => {
+    requireSession();
+    return service.bounceAllocation(payload.id, payload);
+  }));
+
   // Full allocation history for one cheque's receipt (Cheques tab's per-cheque history view).
   ipcMain.handle('cheques:allocations-for-receipt', wrap((payload) => {
     requireSession();

@@ -124,10 +124,15 @@ test('cheques: bounce() reverses the deposit AND the original receipt, keeps the
   // This is exactly the path that crashed on CK_ledger_entries_one (2026-08-04): reversing a
   // DEPOSIT allocation has to look the bank up via the CHEQUE (cheque_allocations has no bank
   // column), not via the allocation row itself.
-  const bounced = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null);
+  // One bounce = one step back: the deposit is undone and the cheque is back in hand, still
+  // marked bounced, with the receipt (customer credit) standing. A second bounce reverses the receipt.
+  const stepBack = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null);
+  assert.equal(stepBack.cheque_status, 'PENDING');
+  assert.ok(stepBack.bounced_date, 'bounced_date must be recorded on every bounce');
+  assert.equal((await receiptsService.getById(receiptId)).status, 'CONFIRMED');
+  const bounced = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-16' }, null);
 
   assert.equal(bounced.cheque_status, 'BOUNCED');
-  assert.ok(bounced.bounced_date, 'bounced_date must be recorded');
 
   const allocations = await allocationRowsFor(receiptId);
   assert.equal(allocations.length, 1);
@@ -193,6 +198,112 @@ test('cheques: reverseAllocation() undoes one endorsement only, freeing the cheq
 
   const receiptAfter = await receiptsService.getById(receiptId);
   assert.equal(receiptAfter.status, 'CONFIRMED', 'reverseAllocation() must never touch the underlying receipt');
+});
+
+test('cheques: a bounced cheque can be deposited again (append-only re-credit), then bounced a second time', async (t) => {
+  const { customer, bank, created } = await setupChequeFixtures(t);
+  const { cheque, receiptId } = await makePostedChequeReceipt(customer, 4000);
+  created.receiptId = receiptId;
+
+  await chequesService.deposit(cheque.cheque_id, { amount: 4000, bank_id: bank.bank_id, allocation_date: '2026-01-11' }, null, undefined);
+  await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null); // undoes the deposit
+  await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null); // reverses the receipt
+  const afterBounce = await query('SELECT COUNT(*) AS n FROM dbo.ledger_entries WHERE source_type = \'RECEIPT\' AND source_id = @id', { id: receiptId });
+
+  await assert.rejects(
+    chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-16' }, null),
+    { code: 'CHEQUE_ALREADY_BOUNCED' },
+    'bouncing an already-bounced (not re-used) cheque makes no sense',
+  );
+
+  const redeposited = await chequesService.deposit(cheque.cheque_id, { amount: 4000, bank_id: bank.bank_id, allocation_date: '2026-01-20' }, null, undefined);
+  assert.equal(redeposited.cheque_status, 'DEPOSITED');
+  assert.ok(redeposited.bounced_date, 'the bounce marker must survive re-use');
+
+  const afterRedeposit = await query('SELECT COUNT(*) AS n FROM dbo.ledger_entries WHERE source_type = \'RECEIPT\' AND source_id = @id', { id: receiptId });
+  assert.equal(afterRedeposit.recordset[0].n, afterBounce.recordset[0].n + 2, 're-credit adds a new pair; the bounce rows stay untouched');
+  const tb = await trialBalance();
+  assert.equal(tb.debit, tb.credit);
+
+  const stepBackAgain = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-25' }, null);
+  assert.equal(stepBackAgain.cheque_status, 'PENDING', 'a second bounce again undoes only the latest step (the new deposit)');
+  const bouncedAgain = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-26' }, null);
+  assert.equal(bouncedAgain.cheque_status, 'BOUNCED');
+  const tb2 = await trialBalance();
+  assert.equal(tb2.debit, tb2.credit);
+});
+
+test('cheques: a chain ABC -> XYZ -> AABB bounces back ONE hop at a time; bounceAllocation() does the same from the Return page', async (t) => {
+  const { customer, vendor, created } = await setupChequeFixtures(t);
+  const { cheque, receiptId } = await makePostedChequeReceipt(customer, 9000);
+  created.receiptId = receiptId;
+
+  await chequesService.endorseToVendor(cheque.cheque_id, { vendor_id: vendor.vendor_id, amount: 5000, allocation_date: '2026-01-11' }, null, undefined);
+  await chequesService.endorseToVendor(cheque.cheque_id, { vendor_id: vendor.vendor_id, amount: 4000, allocation_date: '2026-01-12' }, null, undefined);
+  let rows = await allocationRowsFor(receiptId);
+
+  const afterFirst = await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-20' }, null);
+  rows = await allocationRowsFor(receiptId);
+  assert.deepEqual(rows.map((r) => r.status), ['ACTIVE', 'REVERSED'], 'only the LATEST hop is undone');
+  assert.equal(afterFirst.cheque_status, 'PARTIALLY_ENDORSED');
+
+  // Return-page path: bounce ONE named allocation (the remaining one).
+  await chequesService.bounceAllocation(rows[0].allocation_id, { date: '2026-01-21' });
+  rows = await allocationRowsFor(receiptId);
+  assert.ok(rows.every((r) => r.status === 'REVERSED'));
+  const cheque2 = await chequesService.getById(cheque.cheque_id);
+  assert.equal(cheque2.cheque_status, 'PENDING');
+  assert.ok(cheque2.bounced_date);
+  assert.equal((await receiptsService.getById(receiptId)).status, 'CONFIRMED');
+
+  const ledger = await query(
+    "SELECT narration FROM dbo.ledger_entries WHERE source_type = 'CHEQUE_ALLOCATION' AND source_id = @id AND narration LIKE 'BOUNCED reversal%'",
+    { id: rows[0].allocation_id },
+  );
+  assert.equal(ledger.recordset.length, 2);
+  const tb = await trialBalance();
+  assert.equal(tb.debit, tb.credit);
+});
+
+test('cheques: two simultaneous bounces of one allocation post the reversal only once', async (t) => {
+  const { customer, vendor, created } = await setupChequeFixtures(t);
+  const { cheque, receiptId } = await makePostedChequeReceipt(customer, 3000);
+  created.receiptId = receiptId;
+  await chequesService.endorseToVendor(cheque.cheque_id, { vendor_id: vendor.vendor_id, allocation_date: '2026-01-11' }, null, undefined);
+  const [alloc] = await allocationRowsFor(receiptId);
+
+  const results = await Promise.allSettled([
+    chequesService.bounceAllocation(alloc.allocation_id, { date: '2026-01-15' }),
+    chequesService.bounceAllocation(alloc.allocation_id, { date: '2026-01-15' }),
+  ]);
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1, 'exactly one call may win');
+  assert.equal((await chequeAllocationLedgerRowsFor(alloc.allocation_id)).length, 4, 'original pair + ONE reversal pair');
+});
+
+test('cheques: two simultaneous first actions on a bounced cheque re-credit the receipt only once', async (t) => {
+  const { customer, vendor, created } = await setupChequeFixtures(t);
+  const { cheque, receiptId } = await makePostedChequeReceipt(customer, 2000);
+  created.receiptId = receiptId;
+  await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null); // no allocations: receipt reversed
+  const rowsBefore = (await query("SELECT COUNT(*) AS n FROM dbo.ledger_entries WHERE source_type = 'RECEIPT' AND source_id = @id", { id: receiptId })).recordset[0].n;
+
+  await Promise.allSettled([
+    chequesService.endorseToVendor(cheque.cheque_id, { vendor_id: vendor.vendor_id, amount: 1000, allocation_date: '2026-01-20' }, null, undefined),
+    chequesService.endorseToVendor(cheque.cheque_id, { vendor_id: vendor.vendor_id, amount: 1000, allocation_date: '2026-01-20' }, null, undefined),
+  ]);
+  const rowsAfter = (await query("SELECT COUNT(*) AS n FROM dbo.ledger_entries WHERE source_type = 'RECEIPT' AND source_id = @id", { id: receiptId })).recordset[0].n;
+  assert.equal(rowsAfter, rowsBefore + 2, 'exactly one re-credit pair, however many actions race');
+});
+
+test('cheques: a bounce undoes the most recently ENTERED step even if an earlier-entered one has a later date', async (t) => {
+  const { customer, vendor, created } = await setupChequeFixtures(t);
+  const { cheque, receiptId } = await makePostedChequeReceipt(customer, 9000);
+  created.receiptId = receiptId;
+  await chequesService.endorseToVendor(cheque.cheque_id, { vendor_id: vendor.vendor_id, amount: 5000, allocation_date: '2026-01-20' }, null, undefined);
+  await chequesService.endorseToVendor(cheque.cheque_id, { vendor_id: vendor.vendor_id, amount: 4000, allocation_date: '2026-01-15' }, null, undefined);
+  await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-25' }, null);
+  const rows = await allocationRowsFor(receiptId);
+  assert.deepEqual(rows.map((r) => r.status), ['ACTIVE', 'REVERSED'], 'the back-dated 4000 was entered last, so it is the one undone');
 });
 
 test.after(async () => {

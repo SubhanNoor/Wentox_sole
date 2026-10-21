@@ -123,6 +123,17 @@ async function setStatus(transaction, chequeId, status) {
   await request.query('UPDATE dbo.cheques SET cheque_status = @status WHERE cheque_id = @chequeId');
 }
 
+// Claims a BOUNCED cheque for re-use: flips BOUNCED -> PENDING and reports whether THIS call did it.
+// The status change is the guard against a double re-credit — two simultaneous first actions both
+// read BOUNCED before their transactions open, but only one UPDATE can match.
+async function claimBouncedForReuse(transaction, chequeId) {
+  const request = requestWithParams(transaction, { chequeId: { type: sql.Int, value: chequeId } });
+  const result = await request.query(
+    `UPDATE dbo.cheques SET cheque_status = 'PENDING' WHERE cheque_id = @chequeId AND cheque_status = 'BOUNCED'`,
+  );
+  return result.rowsAffected[0] > 0;
+}
+
 async function markBounced(transaction, chequeId, bouncedDate) {
   const request = requestWithParams(transaction, {
     chequeId: { type: sql.Int, value: chequeId },
@@ -131,6 +142,31 @@ async function markBounced(transaction, chequeId, bouncedDate) {
   await request.query(
     `UPDATE dbo.cheques SET cheque_status = 'BOUNCED', bounced_date = @bouncedDate WHERE cheque_id = @chequeId`,
   );
+}
+
+// A bounce that only undoes ONE step (the latest allocation) leaves the cheque in an earlier state
+// rather than BOUNCED, but it must still be marked as bounced — bounced_date is that marker.
+async function setBouncedDate(transaction, chequeId, bouncedDate) {
+  const request = requestWithParams(transaction, {
+    chequeId: { type: sql.Int, value: chequeId },
+    bouncedDate: { type: sql.Date, value: bouncedDate },
+  });
+  await request.query('UPDATE dbo.cheques SET bounced_date = @bouncedDate WHERE cheque_id = @chequeId');
+}
+
+// The most recent still-ACTIVE allocation (deposit or endorsement) on a receipt — the step a bounce
+// undoes. Latest by ENTRY order (allocation_id), not allocation_date: a back-dated step entered later
+// is still the most recent hand-over (user decision, 2026-10-22).
+async function findLatestActiveAllocation(receiptId) {
+  const result = await query(
+    `SELECT TOP 1 ca.*, ch.cheque_id, ch.cheque_status, ch.cheque_no, ch.cheque_date
+     FROM dbo.cheque_allocations ca
+     JOIN dbo.cheques ch ON ch.receipt_id = ca.receipt_id
+     WHERE ca.receipt_id = @receiptId AND ca.status = 'ACTIVE'
+     ORDER BY ca.allocation_id DESC`,
+    { receiptId: { type: sql.Int, value: receiptId } },
+  );
+  return result.recordset[0] || null;
 }
 
 // RETURNED — distinct from BOUNCED (a due-date issue or any other non-bounce reason), same
@@ -259,7 +295,7 @@ async function listEndorsedAllocations(filters = {}) {
   const conditions = [
     "ca.status = 'ACTIVE'",
     "ca.disposition_type IN ('VENDOR_PAYMENT','EXPENSE_PAYMENT')",
-    "ch.cheque_status NOT IN ('CLEARED','BOUNCED','RETURNED')",
+    "ch.cheque_status NOT IN ('CLEARED','RETURNED')",
   ];
   const params = {};
 
@@ -301,10 +337,15 @@ async function reverseOneAllocation(transaction, allocationId) {
   const allocation = result.recordset[0];
   if (!allocation) return null;
 
+  // Only an ACTIVE row flips, and the row count is the guard: the service checks "is it ACTIVE" on a
+  // pool read BEFORE this transaction, so two simultaneous reversals both pass that check. The
+  // second one's UPDATE matches nothing, we return null, and the caller rolls back before it can
+  // post a second reversal pair.
   const updateRequest = requestWithParams(transaction, { allocationId: { type: sql.Int, value: allocationId } });
-  await updateRequest.query(
-    `UPDATE dbo.cheque_allocations SET status = 'REVERSED' WHERE allocation_id = @allocationId`,
+  const updated = await updateRequest.query(
+    `UPDATE dbo.cheque_allocations SET status = 'REVERSED' WHERE allocation_id = @allocationId AND status = 'ACTIVE'`,
   );
+  if (!updated.rowsAffected[0]) return null;
   return allocation;
 }
 
@@ -374,7 +415,7 @@ async function insertLedgerEntries(transaction, rows) {
 
 module.exports = {
   insert, updateDetails, deleteCheque, findById, findByReceiptId, list, setBank, setStatus,
-  markBounced, markReturned, insertAllocation, findAllocationByExpenseId, listAllocations,
+  markBounced, claimBouncedForReuse, setBouncedDate, findLatestActiveAllocation, markReturned, insertAllocation, findAllocationByExpenseId, listAllocations,
   detachAllocationFromExpense, findAnyAllocationByExpenseId,
   findAllocationById, listEndorsedAllocations, sumActiveAllocations,
   sumActiveAllocationsInTransaction, reverseAllocations, reverseOneAllocation, insertLedgerEntries,

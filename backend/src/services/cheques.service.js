@@ -10,8 +10,10 @@ const ApiError = require('../errors/ApiError');
 const { withTransaction } = require('../db/pool');
 const CODES = require('../constants/reservedAccounts');
 
-// Terminal states — nothing further can happen to a cheque once here.
-const TERMINAL_STATUSES = ['BOUNCED', 'RETURNED', 'CLEARED'];
+// Terminal states — nothing further can happen to a cheque once here. BOUNCED is deliberately NOT
+// one (user request, 2026-10-21): a bounced cheque can be deposited, endorsed, returned or bounced
+// again — see recreditIfBounced() below.
+const TERMINAL_STATUSES = ['RETURNED', 'CLEARED'];
 
 function list(filters) {
   return repository.list(filters);
@@ -77,6 +79,44 @@ async function recomputeStatus(transaction, cheque, closingDispositionType) {
   }
 }
 
+// A BOUNCED cheque has had its allocations AND its receipt reversed (reverseCheque), so the customer
+// is no longer credited and CHEQUES IN HAND holds nothing for it. Before it can be deposited or
+// endorsed again the receipt's own effect has to come back — the exact mirror of the receipt
+// reversal: Dr CHEQUES IN HAND (or whatever the receipt originally debited) / Cr customer, plus the
+// commission legs. Append-only: the bounce rows stay, this is a fresh pair dated `date`. The cheque
+// goes back to PENDING (bounced_date is kept — that is what keeps it showing as marked bounced), and
+// the caller's own disposal then moves it on. No-op for any cheque that is not currently BOUNCED.
+async function recreditIfBounced(transaction, cheque, date) {
+  if (cheque.cheque_status !== 'BOUNCED') return;
+  // Every read below goes through the pool, on a different connection from `transaction`, and
+  // receiptsService.getById joins dbo.cheques — so they all have to run BEFORE the claim below
+  // locks this cheque's row, or they would wait on our own uncommitted UPDATE forever.
+  const receipt = await receiptsService.getById(cheque.receipt_id);
+  let rows = null;
+  if (receipt.status === 'CONFIRMED') {
+    const debitSide = await receiptsService.resolveDebitSide(receipt.payment_mode, receipt.bank_id, receipt.online_ba_id);
+    // Contains "reversal" on purpose: reports.service.js#shapeLedgerRow keys on that word to show a
+    // row's own narration instead of re-deriving a plain "Cheque …" receipt line from the source doc.
+    const narration = `Bounce reversal undone (re-credit) — ${chequeRef(cheque.cheque_no, cheque.cheque_date)}`;
+    rows = [
+      { entry_date: date, ...debitSide, debit: receipt.amount, credit: 0, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration },
+      { entry_date: date, ba_id: receipt.ba_id, debit: 0, credit: receipt.amount, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration },
+    ];
+    if (receipt.commission > 0) {
+      const commissionAccount = await chartAccountsRepository.findByCode(CODES.COMMISSION_ALLOWED);
+      if (!commissionAccount) throw new Error(`Reserved chart account COMMISSION ALLOWED (code ${CODES.COMMISSION_ALLOWED}) not found — run npm run seed`);
+      rows.push(
+        { entry_date: date, ac_id: commissionAccount.ac_id, debit: receipt.commission, credit: 0, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission` },
+        { entry_date: date, ba_id: receipt.ba_id, debit: 0, credit: receipt.commission, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission` },
+      );
+    }
+  }
+  // The status flip is the guard (see repository.claimBouncedForReuse): a concurrent first action
+  // that lost the race skips the re-credit instead of posting it a second time.
+  if (!(await repository.claimBouncedForReuse(transaction, cheque.cheque_id))) return;
+  if (rows) await repository.insertLedgerEntries(transaction, rows);
+}
+
 // DEPOSIT — Dr bank BA / Cr CHEQUES IN HAND. Banking a cheque is an internal asset move: the
 // customer was already credited when the CHEQUE receipt posted, so no new money arrives, but the
 // asset does leave the CHEQUES IN HAND holding bucket for a specific bank and both figures have to
@@ -110,6 +150,7 @@ async function deposit(chequeId, payload, userId, session) {
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
+    await recreditIfBounced(transaction, cheque, payload.allocation_date);
     const allocationId = await repository.insertAllocation(transaction, {
       receipt_id: cheque.receipt_id,
       disposition_type: 'DEPOSIT',
@@ -149,6 +190,7 @@ async function endorseToVendor(chequeId, payload, userId, session) {
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
+    await recreditIfBounced(transaction, cheque, payload.allocation_date);
     const allocationId = await repository.insertAllocation(transaction, {
       receipt_id: cheque.receipt_id,
       disposition_type: 'VENDOR_PAYMENT',
@@ -185,6 +227,7 @@ async function endorseToExpense(chequeId, payload, userId, session) {
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
+    await recreditIfBounced(transaction, cheque, payload.allocation_date);
     const allocationId = await repository.insertAllocation(transaction, {
       receipt_id: cheque.receipt_id,
       disposition_type: 'EXPENSE_PAYMENT',
@@ -243,6 +286,13 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
     throw ApiError.conflict(`This cheque is already ${cheque.cheque_status.toLowerCase()}`, 'CHEQUE_TERMINAL');
   }
   if (!date) throw ApiError.badRequest('date is required');
+  // Already BOUNCED (and not re-used since) = every allocation and the receipt are ALREADY reversed.
+  // Bouncing it again is meaningless; returning it to the sender only needs the status flip, with
+  // no second set of reversal rows.
+  const alreadyReversed = cheque.cheque_status === 'BOUNCED';
+  if (alreadyReversed && mode === 'BOUNCED') {
+    throw ApiError.conflict('This cheque is already bounced', 'CHEQUE_ALREADY_BOUNCED');
+  }
 
   const receipt = await receiptsService.getById(cheque.receipt_id);
   // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so this posts a
@@ -250,7 +300,7 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
-    const reversedAllocations = await repository.reverseAllocations(transaction, cheque.receipt_id);
+    const reversedAllocations = alreadyReversed ? [] : await repository.reverseAllocations(transaction, cheque.receipt_id);
 
     for (const allocation of reversedAllocations) {
       // Every disposition now carries a ledger pair (Dr somewhere / Cr CHEQUES IN HAND), so every
@@ -279,7 +329,7 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
     // Only reverse the receipt's own ledger effect if it was actually posted — a DRAFT receipt's
     // cheque should never have reached disposal in the first place (assertDisposable() requires
     // CONFIRMED), but this guards defensively regardless.
-    if (receipt.status === 'CONFIRMED') {
+    if (receipt.status === 'CONFIRMED' && !alreadyReversed) {
       // online_ba_id has to be passed here too, not only on the posting path: a reversal must land
       // back on the SAME account the original posting used. An ONLINE receipt that named a business
       // account directly (migration 028) would otherwise reverse against whatever bank_id held —
@@ -313,8 +363,24 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
   return getById(chequeId);
 }
 
-function bounce(chequeId, payload, userId) {
-  return reverseCheque(chequeId, { date: payload.bounced_date, mode: 'BOUNCED' }, userId);
+// A bounce moves the cheque ONE step back, not all the way (user request, 2026-10-22): a cheque that
+// went ABC -> us -> XYZ -> AABB and bounces is taken back from AABB only, leaving the earlier
+// hand-overs standing. So the step undone is the latest ACTIVE allocation (deposit or endorsement);
+// only a cheque with none left — sitting in hand — has its receipt reversed (customer's due
+// restored), which is the previous full bounce. Each bounce is one such step, so bouncing again
+// goes one step further back.
+async function bounce(chequeId, payload, userId) {
+  const cheque = await getById(chequeId);
+  if (TERMINAL_STATUSES.includes(cheque.cheque_status)) {
+    throw ApiError.conflict(`This cheque is already ${cheque.cheque_status.toLowerCase()}`, 'CHEQUE_TERMINAL');
+  }
+  if (cheque.cheque_status === 'BOUNCED') {
+    throw ApiError.conflict('This cheque is already bounced', 'CHEQUE_ALREADY_BOUNCED');
+  }
+  const latest = await repository.findLatestActiveAllocation(cheque.receipt_id);
+  if (!latest) return reverseCheque(chequeId, { date: payload.bounced_date, mode: 'BOUNCED' }, userId);
+  await bounceAllocation(latest.allocation_id, { date: payload.bounced_date });
+  return getById(chequeId);
 }
 
 function returnToSender(chequeId, payload, userId) {
@@ -349,24 +415,62 @@ async function reverseAllocation(allocationId, payload, userId) {
     throw ApiError.conflict(`This cheque is already ${allocation.cheque_status.toLowerCase()}`, 'CHEQUE_TERMINAL');
   }
   if (!payload.date) throw ApiError.badRequest('date is required');
+  return undoAllocation(allocation, { date: payload.date, remarks: payload.remarks, bounced: false });
+}
 
+// Mark Bounced on ONE allocation — the Cheque Return page's button, and what bounce() does for the
+// latest step. Same mechanics as reverseAllocation (this step only, balance freed, nothing else
+// touched) plus the bounce marker, and — unlike a return — it is also allowed on a DEPOSIT, whose
+// other side is the bank that allocation went into.
+async function bounceAllocation(allocationId, payload) {
+  const allocation = await repository.findAllocationById(allocationId);
+  if (!allocation) throw ApiError.notFound('Allocation not found');
+  if (allocation.status !== 'ACTIVE') {
+    throw ApiError.conflict('This allocation has already been reversed', 'ALLOCATION_ALREADY_REVERSED');
+  }
+  if (TERMINAL_STATUSES.includes(allocation.cheque_status)) {
+    throw ApiError.conflict(`This cheque is already ${allocation.cheque_status.toLowerCase()}`, 'CHEQUE_TERMINAL');
+  }
+  if (!payload.date) throw ApiError.badRequest('date is required');
+  return undoAllocation(allocation, { date: payload.date, remarks: payload.remarks, bounced: true });
+}
+
+const STEP_LABELS = { DEPOSIT: 'deposit', VENDOR_PAYMENT: 'paid to vendor', EXPENSE_PAYMENT: 'paid to expense account' };
+
+// The single-allocation undo shared by return and bounce: flip the allocation to REVERSED, post the
+// opposite pair (Cr target / Dr CHEQUES IN HAND), and move the cheque's status back toward PENDING.
+async function undoAllocation(allocation, { date, remarks, bounced }) {
   // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so this posts a
   // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
-  const targetBaId = allocation.target_vendor_id
-    ? (await vendorsService.getById(allocation.target_vendor_id)).ba_id
-    : allocation.target_ba_id;
+  let targetBaId;
+  if (allocation.disposition_type === 'DEPOSIT') {
+    // Each deposit carries its own bank (migration 037) — never cheque.bank_id, which is only the first.
+    const bank = await bankAccountsService.getById(allocation.bank_id);
+    if (!bank.ba_id) throw ApiError.conflict('Bank account has no linked ledger account yet', 'NO_BANK_ACCOUNT');
+    targetBaId = bank.ba_id;
+  } else {
+    targetBaId = allocation.target_vendor_id
+      ? (await vendorsService.getById(allocation.target_vendor_id)).ba_id
+      : allocation.target_ba_id;
+  }
   // Cheque no. and due date, not the internal allocation id (per the user, 2026-09-30) — the
-  // vendor's ledger has to say WHICH cheque came back.
+  // vendor's ledger has to say WHICH cheque came back. A bounce narration contains "reversal" and
+  // names the step undone, so the ledger shows which step the cheque went back from.
   // Capped to ledger_entries.narration's NVARCHAR(500) — remarks have no length limit of their own.
-  const narration = `Endorsement reversal — ${chequeRef(allocation.cheque_no, allocation.cheque_date)}${payload.remarks ? ` — ${payload.remarks}` : ''}`.slice(0, 500);
+  const prefix = bounced
+    ? `BOUNCED reversal — ${chequeRef(allocation.cheque_no, allocation.cheque_date)} — ${STEP_LABELS[allocation.disposition_type] || 'step'} undone`
+    : `Endorsement reversal — ${chequeRef(allocation.cheque_no, allocation.cheque_date)}`;
+  const narration = `${prefix}${remarks ? ` — ${remarks}` : ''}`.slice(0, 500);
 
   await withTransaction(async (transaction) => {
-    await repository.reverseOneAllocation(transaction, allocationId);
+    if (!(await repository.reverseOneAllocation(transaction, allocation.allocation_id))) {
+      throw ApiError.conflict('This allocation has already been reversed', 'ALLOCATION_ALREADY_REVERSED');
+    }
     await repository.insertLedgerEntries(transaction, [
-      { entry_date: payload.date, ba_id: chequesInHand.ba_id, debit: allocation.amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration },
-      { entry_date: payload.date, ba_id: targetBaId, debit: 0, credit: allocation.amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocationId, narration },
+      { entry_date: date, ba_id: chequesInHand.ba_id, debit: allocation.amount, credit: 0, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration },
+      { entry_date: date, ba_id: targetBaId, debit: 0, credit: allocation.amount, source_type: 'CHEQUE_ALLOCATION', source_id: allocation.allocation_id, narration },
     ]);
 
     // Balance freed up — status moves back toward PENDING (or PARTIALLY_ENDORSED if other
@@ -375,12 +479,13 @@ async function reverseAllocation(allocationId, payload, userId) {
     const stillAllocated = await repository.sumActiveAllocationsInTransaction(transaction, allocation.receipt_id);
     const newStatus = stillAllocated > 0 ? 'PARTIALLY_ENDORSED' : 'PENDING';
     await repository.setStatus(transaction, cheque.cheque_id, newStatus);
+    if (bounced) await repository.setBouncedDate(transaction, cheque.cheque_id, date);
   });
 
-  return repository.findAllocationById(allocationId);
+  return repository.findAllocationById(allocation.allocation_id);
 }
 
 module.exports = {
-  list, getById, deposit, endorseToVendor, endorseToExpense, markCleared, bounce, returnToSender,
+  list, getById, deposit, endorseToVendor, endorseToExpense, markCleared, bounce, bounceAllocation, returnToSender,
   listEndorsedAllocations, reverseAllocation, listAllocationsForReceipt,
 };

@@ -8901,3 +8901,40 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
     old test: Product Ledger, then Purchase Master/Detail's Exit-click race ("Target page closed").
     Both pass when re-run.
   - Backend 33/33, vitest 20/20, tsc clean, no new lint errors.
+
+### 2026-10-22 — Bounced cheques can be used again
+- **What:** a cheque marked bounced is no longer a dead end. It can be deposited, endorsed to a vendor or expense, returned to the sender, or bounced a second time. It keeps showing as "marked bounced" on the Cheques screen and in the Cheque Ledger.
+- **How:**
+  - A bounce works as before: all allocations and the receipt are reversed with new rows.
+  - The first action after a bounce posts a fresh re-credit (Dr Cheques In Hand / Cr customer, plus the commission legs) in the same transaction, then carries on as normal. The bounce rows are never touched.
+  - Returning a still-bounced cheque only changes its status, because everything is already reversed. Bouncing a still-bounced cheque is refused (`CHEQUE_ALREADY_BOUNCED`).
+  - The bounce date is kept after re-use. Migration 044 relaxes `CK_cheques_bounced` so only a BOUNCED cheque must carry a date.
+  - A second bounce overwrites `bounced_date`, so the Cheque Ledger's own "Bounced" row shows the latest one. The first bounce's reversal rows stay in the ledger.
+- **Files:** `src/services/cheques.service.js`, `src/repositories/cheques.repository.js`, `src/db/migrations/044_cheque_bounce_reusable.sql`, `test/cheques.disposal.test.js`, `frontend/src/components/ChequesTab.tsx`.
+- **Not touched:** `lib/cheques.ts` and `lib/cashbank.ts` are old unused helpers (only `todayISO` is used), so they were left alone.
+- **Verified:** cheque tests 7/7 on `wentox_test`; the new test covers bounce → re-deposit → second bounce with the trial balance at zero.
+
+### 2026-10-22 — A bounce goes one step back; Mark Bounced on the Return page
+- **What:** Mark Bounced no longer unwinds everything at once (the Cash Book showed the deposit and the receipt both reversed on one date). It now undoes only the latest step, so a cheque that went ABC → XYZ → AABB goes back from AABB only.
+- **How:**
+  - If the cheque has an active deposit or endorsement, the latest one (by date, then id) is reversed. The earlier ones stay, and the cheque goes back to Pending or Partially Endorsed.
+  - If nothing is active, the receipt is reversed (the customer's due is restored) and the cheque becomes Bounced, as before. Bouncing again goes one step further back.
+  - Every bounce sets `bounced_date`, so the cheque keeps showing as marked bounced.
+  - The bounce narration is "BOUNCED reversal — Cheque #… — <step> undone".
+  - New `bounceAllocation()` and channel `cheques:bounce-allocation`. The Cheque Return page's endorsed rows get a Mark Bounced button that undoes that one allocation.
+  - `reverseAllocation()` and `bounceAllocation()` share one undo routine, `undoAllocation()`.
+- **Files:** `src/services/cheques.service.js`, `src/repositories/cheques.repository.js`, `src/ipc/cheques.ipc.js`, `test/cheques.disposal.test.js`, `test/cheques.splitDeposit.test.js`, `frontend/src/lib/api.ts`, `frontend/src/pages/ChequeReturnsContent.tsx`, `frontend/src/components/ChequesTab.tsx`.
+- **Verified:** cheque tests 8/8 on `wentox_test`, including a chain bounced one hop at a time and a bounce from the Return page with the trial balance at zero.
+
+### 2026-10-22 — Debugger fixes for the one-step bounce
+- **Fixed:**
+  1. **Double re-credit:** two simultaneous first actions on a bounced cheque could both post the re-credit. The BOUNCED → PENDING flip is now the guard (`claimBouncedForReuse`), and only the call that wins the flip posts it. The reads run before the flip, because the receipt read joins `cheques` and would wait on our own lock.
+  2. **Double reversal:** `reverseOneAllocation` now flips only ACTIVE rows and the service throws `ALLOCATION_ALREADY_REVERSED` when nothing changed, so a racing second call rolls back before it posts a second pair. This also covers the old Return button.
+  3. **"Latest step":** it is now the most recently entered allocation (`allocation_id DESC`), not the latest allocation date.
+- **Not done (optional):** blocking un-post/un-confirm of a receipt whose cheque has a bounce marker.
+- **Verified:** cheque tests 11/11, including a race test for each of fixes 1 and 2 and a back-dated-entry test for fix 3.
+
+### 2026-10-22 — Cash Book showed earlier-dated postings of the same document
+- **What was wrong:** the Cash Book for a day also printed postings from other dates. A cheque endorsed on 10 Oct and returned on 15 Oct share one `source_id`, so the 15 Oct book also printed the 10 Oct endorsement. Bounced receipts behave the same way.
+- **Fix:** `cashBookTransactionSides()` in `src/repositories/reports.repository.js` now applies the same date window to the rows it returns, not only to the step that finds which documents qualify. Both lines of a posting always carry the same date, so no posting is split.
+- **Verified:** the new `test/cashBook.dateWindow.test.js` fails without the fix and passes with it. It checks 10 Jan, 15 Jan and the range 10–15 Jan. Full backend suite 39/39.

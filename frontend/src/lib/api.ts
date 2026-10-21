@@ -2285,6 +2285,7 @@ declare global {
         'return-to-sender': (payload: { id: number; returned_date: string; reason?: string; remarks?: string }) => Promise<ApiResult<ChequeRow>>;
         'endorsed-allocations': (payload?: { date_from?: string; date_to?: string }) => Promise<ApiResult<ChequeAllocationRow[]>>;
         'reverse-allocation': (payload: { id: number; date: string; remarks?: string }) => Promise<ApiResult<{ ok: true }>>;
+        'bounce-allocation': (payload: { id: number; date: string; remarks?: string }) => Promise<ApiResult<{ ok: true }>>;
         'allocations-for-receipt': (payload: { receipt_id: number }) => Promise<ApiResult<ChequeAllocationRow[]>>;
       };
       businessAccounts: {
@@ -3330,6 +3331,8 @@ export const cheques = {
     window.api ? window.api.cheques['endorsed-allocations'](payload).then(r => mapResult(r, rows => rows.map(normalizeAllocationRow))) : Promise.resolve(NO_BRIDGE),
   reverseAllocation: (id: number, payload: { date: string; remarks?: string }) =>
     window.api ? window.api.cheques['reverse-allocation']({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
+  bounceAllocation: (id: number, payload: { date: string; remarks?: string }) =>
+    window.api ? window.api.cheques['bounce-allocation']({ id, ...payload }) : Promise.resolve(NO_BRIDGE),
   allocationsForReceipt: (receiptId: number) =>
     window.api ? window.api.cheques['allocations-for-receipt']({ receipt_id: receiptId }).then(r => mapResult(r, rows => rows.map(normalizeAllocationRow))) : Promise.resolve(NO_BRIDGE)
 };

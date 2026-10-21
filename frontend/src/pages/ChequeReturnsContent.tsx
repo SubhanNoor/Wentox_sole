@@ -51,6 +51,8 @@ export function ChequeReturnsContent() {
   const [returningAlloc, setReturningAlloc] = useState<ChequeAllocationRow | null>(null);
   const [returnDate, setReturnDate] = useState(todayISO());
   const [returnRemarks, setReturnRemarks] = useState('');
+  // Same dialog serves Return and Mark Bounced on an endorsed row — both undo this one allocation.
+  const [allocMode, setAllocMode] = useState<'RETURN' | 'BOUNCE'>('RETURN');
 
   // Issued-cheque action modal — covers both Mark Bounced and Mark Returned, same shape as
   // ChequesTab.tsx's own bounce/return distinction for a RECEIVED cheque.
@@ -120,7 +122,8 @@ export function ChequeReturnsContent() {
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [allocations, issuedCheques, search]);
 
-  const openReturn = (allocation: ChequeAllocationRow) => {
+  const openReturn = (allocation: ChequeAllocationRow, mode: 'RETURN' | 'BOUNCE' = 'RETURN') => {
+    setAllocMode(mode);
     setReturningAlloc(allocation);
     setReturnDate(todayISO());
     setReturnRemarks('');
@@ -128,13 +131,14 @@ export function ChequeReturnsContent() {
 
   const confirmReturn = async () => {
     if (!returningAlloc) return;
-    const res = await api.cheques.reverseAllocation(returningAlloc.allocation_id, {
+    const call = allocMode === 'BOUNCE' ? api.cheques.bounceAllocation : api.cheques.reverseAllocation;
+    const res = await call(returningAlloc.allocation_id, {
       date: returnDate,
       remarks: returnRemarks || undefined,
     });
     if (!res.ok) { fail(res.error.message); return; }
     flash(
-      `Reversed ${formatCurrency(returningAlloc.amount)} back into Cheques in Hand, dated ${formatDate(returnDate)}, ` +
+      `${allocMode === 'BOUNCE' ? 'Bounced: reversed' : 'Reversed'} ${formatCurrency(returningAlloc.amount)} back into Cheques in Hand, dated ${formatDate(returnDate)}, ` +
       `and freed up that much of the cheque's balance again.`
     );
     setReturningAlloc(null);
@@ -235,12 +239,20 @@ export function ChequeReturnsContent() {
                     </td>
                     <td className="p-3 text-center" data-no-print>
                       {row.source === 'endorsed' ? (
-                        <button
-                          onClick={() => openReturn(row.endorsed!)}
-                          className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200 transition-colors"
-                        >
-                          <RotateCcw size={11} /> Return
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => openReturn(row.endorsed!, 'BOUNCE')}
+                            className="text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 transition-colors"
+                          >
+                            Mark Bounced
+                          </button>
+                          <button
+                            onClick={() => openReturn(row.endorsed!)}
+                            className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border uppercase bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200 transition-colors"
+                          >
+                            <RotateCcw size={11} /> Return
+                          </button>
+                        </div>
                       ) : (
                         <div className="flex items-center justify-center gap-1.5">
                           <button
@@ -271,7 +283,8 @@ export function ChequeReturnsContent() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn" data-no-print>
           <form onSubmit={e => e.preventDefault()} className="bg-white rounded-xl shadow-xl border p-6 w-full max-w-md mx-4 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <h3 className="font-lora font-bold text-lg text-slate-800 mb-2 flex items-center gap-2">
-              <AlertTriangle size={18} className="text-slate-600" /> Return This Endorsement
+              <AlertTriangle size={18} className={allocMode === 'BOUNCE' ? 'text-rose-600' : 'text-slate-600'} />
+              {allocMode === 'BOUNCE' ? 'Mark This Endorsement Bounced' : 'Return This Endorsement'}
             </h3>
             <p className="text-xs text-slate-600 mb-4 leading-relaxed">
               Reverses <strong>only this payment</strong> ({formatCurrency(returningAlloc.amount)}) —
@@ -282,7 +295,7 @@ export function ChequeReturnsContent() {
             </p>
 
             <div className="mb-3">
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Return date</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">{allocMode === 'BOUNCE' ? 'Bounce date' : 'Return date'}</label>
               <input
                 type="date"
                 value={returnDate}
@@ -312,9 +325,9 @@ export function ChequeReturnsContent() {
               <button
                 type="submit"
                 onClick={confirmReturn}
-                className="px-4 py-2 text-sm rounded-lg bg-slate-700 text-white hover:bg-slate-800"
+                className={`px-4 py-2 text-sm rounded-lg text-white ${allocMode === 'BOUNCE' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-700 hover:bg-slate-800'}`}
               >
-                Confirm Return
+                {allocMode === 'BOUNCE' ? 'Confirm Bounce' : 'Confirm Return'}
               </button>
             </div>
           </form>

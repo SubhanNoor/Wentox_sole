@@ -876,6 +876,11 @@ async function cashBookTransactionSides({ date_from, date_to }, { cashAcId, bank
      FROM money_lines m
      JOIN dbo.ledger_entries le
        ON le.source_type = m.source_type AND le.source_id = m.source_id
+      -- Same date window as money_lines. One document can post on several dates (a cheque
+      -- endorsement on 10 Oct and its return on 15 Oct share source_id = the allocation), and
+      -- without this the 15 Oct book also printed the 10 Oct postings. Both lines of one posting
+      -- always carry the same date, so no posting is ever split by this.
+      AND le.entry_date >= @dateFrom AND le.entry_date <= @dateTo
      LEFT JOIN dbo.business_accounts ba ON ba.ba_id = le.ba_id
      LEFT JOIN dbo.chart_of_accounts ca ON ca.ac_id = le.ac_id
      -- NATURAL POSTING ORDER (entry_id), not credit-first. One source document can hold more than

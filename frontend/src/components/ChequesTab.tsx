@@ -52,7 +52,9 @@ export default function ChequesTab() {
   // Cleared only renders on a DEPOSITED/ENDORSED row, the button becomes unreachable until the
   // operator changes the filter by hand (this exact gap already happened once for DEPOSITED;
   // ENDORSED had the same gap until CHQ-02, changes-14-09-26.md, 2026-09-15).
-  const OPEN_STATUSES: ChequeStatus[] = ['PENDING', 'PARTIALLY_ENDORSED', 'DEPOSITED', 'ENDORSED'];
+  // BOUNCED is in here too (2026-10-21): a bounced cheque can be issued, returned or cleared again,
+  // so hiding it from the default view would make those buttons unreachable.
+  const OPEN_STATUSES: ChequeStatus[] = ['PENDING', 'PARTIALLY_ENDORSED', 'DEPOSITED', 'ENDORSED', 'BOUNCED'];
 
   const statusOptionsList: { value: 'all' | 'open' | ChequeStatus; label: string }[] = [
     { value: 'open', label: 'Open (not yet cleared)' },
@@ -139,7 +141,9 @@ export default function ChequesTab() {
   }, [loadCheques, dataVersion]);
 
   function unallocatedFor(c: ChequeRow): number {
-    if (c.cheque_status === 'BOUNCED' || c.cheque_status === 'RETURNED') return 0;
+    // A BOUNCED cheque is NOT zero any more: every allocation is REVERSED, so the full receipt
+    // amount is available to issue again (the backend re-credits the customer on the next action).
+    if (c.cheque_status === 'RETURNED') return 0;
     const active = (allocationsByReceipt[c.receipt_id] || []).filter(a => a.status === 'ACTIVE');
     const allocated = active.reduce((s, a) => s + a.amount, 0);
     return Math.max(0, (c.receipt_amount ?? 0) - allocated);
@@ -245,10 +249,12 @@ export default function ChequesTab() {
     if (!bouncingCheque) return;
     const res = await api.cheques.bounce(bouncingCheque.cheque_id, { bounced_date: bounceDate });
     if (!res.ok) { fail(res.error.message); return; }
-    const reversedCount = (allocationsByReceipt[bouncingCheque.receipt_id] || []).filter(a => a.status === 'ACTIVE').length;
+    // One bounce = one step back (backend: cheques.service.js#bounce) — the latest deposit or
+    // endorsement if any is still active, otherwise the receipt itself.
+    const hadActive = (allocationsByReceipt[bouncingCheque.receipt_id] || []).some(a => a.status === 'ACTIVE');
     flash(
-      reversedCount > 0
-        ? `Cheque ${bouncingCheque.cheque_no} marked bounced. The customer's due is restored and ${reversedCount} allocation(s) were reversed.`
+      hadActive
+        ? `Cheque ${bouncingCheque.cheque_no} marked bounced. The latest deposit/endorsement was reversed — the cheque went one step back.`
         : `Cheque ${bouncingCheque.cheque_no} marked bounced. The customer's due is restored.`
     );
     setBouncingCheque(null);
@@ -496,8 +502,11 @@ export default function ChequesTab() {
                   // tell, so it offered a Dispose button that always came back "This receipt is not
                   // posted yet" — the operator's actual next step is on the Receipts screen.
                   const receiptPosted = row.cheque.receipt_status !== 'DRAFT';
-                  const canDispose = receiptPosted && row.status !== 'BOUNCED' && row.status !== 'CLEARED' && row.unallocated > 0;
-                  const canReturn = receiptPosted && (row.status === 'PENDING' || row.status === 'PARTIALLY_ENDORSED');
+                  const canDispose = receiptPosted && row.status !== 'CLEARED' && row.unallocated > 0;
+                  const canReturn = receiptPosted && (row.status === 'PENDING' || row.status === 'PARTIALLY_ENDORSED' || row.status === 'BOUNCED');
+                  // The bounce is never forgotten: once the cheque is re-used its status moves on,
+                  // but bounced_date stays, so the row keeps saying it was marked bounced.
+                  const wasBounced = !!row.cheque.bounced_date && row.status !== 'BOUNCED';
                   return (
                     <Fragment key={row.cheque.cheque_id}>
                       <tr
@@ -518,6 +527,14 @@ export default function ChequesTab() {
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase ${STATUS_STYLES[row.status]}`}>
                             {row.status.replace('_', ' ')}
                           </span>
+                          {wasBounced && (
+                            <span
+                              title={`Marked bounced on ${formatDate(row.cheque.bounced_date)} and used again since`}
+                              className="block mt-1 text-[9px] font-bold px-1.5 py-0.5 rounded border uppercase bg-rose-50 text-rose-700 border-rose-200"
+                            >
+                              Marked bounced · {formatDate(row.cheque.bounced_date)}
+                            </span>
+                          )}
                         </td>
                         <td className="p-3" data-no-print>
                           <div className="flex flex-wrap items-center justify-center gap-1.5">
@@ -747,11 +764,11 @@ export default function ChequesTab() {
               <AlertTriangle size={18} className="text-rose-600" /> Mark Cheque Bounced
             </h3>
             <p className="text-xs text-slate-600 mb-4 leading-relaxed">
-              This reverses <strong>both sides</strong>: the customer's payment is cancelled so their
-              due goes back up, and every allocation made from this cheque is reversed so the
-              vendor's or expense account's balance goes back up too. Original entries are kept —
-              the correction is posted on the date below, so reports you have already printed still
-              reconcile.
+              A bounce moves the cheque <strong>one step back</strong>. If it has been deposited or
+              endorsed, only the <strong>latest</strong> deposit/endorsement is reversed and the
+              earlier steps stand. If it is sitting in hand, the customer's payment is cancelled so
+              their due goes back up. Bounce again to go one step further. Original entries are
+              kept — the correction is posted on the date below.
             </p>
 
             <div className="mb-4">
