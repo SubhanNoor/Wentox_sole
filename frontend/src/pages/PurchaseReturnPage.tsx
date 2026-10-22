@@ -1497,7 +1497,7 @@ const nextSystemBillNo = useMemo(
             control strip as the Edit button it modifies (per the user, 2026-09-04). */}
         <EditScopeRadios name="purchase-return-edit-scope" value={editScope} onChange={setEditScope} />
 
-        {/* This <form> IS the invoice card — height pinned to the remaining viewport space (see
+        {/* This <form> IS the invoice card — at least the remaining viewport space (a minimum, so a short window scrolls rather than squashing the lines) (see
             invoiceCardHeight above) and laid out as a flex column, so the item table below can
             flex-grow into whatever room that leaves. Every other child here keeps its natural size
             (shrink-0) — only the table wrapper is flex-1. */}
@@ -1508,7 +1508,7 @@ const nextSystemBillNo = useMemo(
           onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col"
           data-edit-scope="detail"
-          style={{ height: invoiceCardHeight ?? undefined, position: 'relative' }}
+          style={{ minHeight: invoiceCardHeight ?? undefined, position: 'relative' }}
           data-no-print
         >
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
@@ -1833,7 +1833,11 @@ const nextSystemBillNo = useMemo(
               content stretch the whole form instead of scrolling internally. The header row is
               `sticky` within the scroll box so column labels stay visible past the first
               screenful of rows. */}
-          <div className="flex-1 min-h-0 mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+          {/* min-h-[140px] (about four lines), not min-h-0: in a short window the line-entry form opened
+              by Edit took every pixel the card had and the lines vanished (2026-10-22, once document
+              windows got shorter to clear the Quick Menu). Now the card grows past the window
+              instead — it is a minimum height, see above — and the page scrolls a little. */}
+          <div className="flex-1 min-h-[140px] mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>

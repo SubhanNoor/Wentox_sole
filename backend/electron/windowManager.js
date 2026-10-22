@@ -76,21 +76,59 @@ function showChild(win) {
   win.focus();
 }
 
-// Cascades each new window a little further down-right than the last, like the legacy app's own
-// floating document windows (the reference screenshot the user sent, 2026-09-07). Without an
-// explicit position, every BrowserWindow defaults to roughly the same spot, so a second window
-// lands exactly on top of the first with nothing peeking out from behind it — indistinguishable
-// from the first having been minimized, which is what the user reported ("previous window gets
-// minimized... not under the new window"). No code here ever calls .minimize() on anything; this
-// is the fix for the actual cause. Wraps back to the top-left corner (mod maxSteps) so a long
-// session of opening windows never cascades one off the visible screen.
-function nextCascadePosition(width, height) {
-  const { x: workX, y: workY, width: workWidth, height: workHeight } = screen.getPrimaryDisplay().workArea;
-  const step = 32;
-  const maxSteps = Math.max(1, Math.floor(Math.min(workWidth - width, workHeight - height) / step));
-  const openCount = childWindows.size + (mainWindow && !mainWindow.isDestroyed() ? 1 : 0);
-  const offset = (openCount % maxSteps) * step;
-  return { x: workX + offset, y: workY + offset };
+// Where the main window's Quick Menu bar ends, in the main window's own CSS pixels from the top of
+// its page — reported by AppLayout.tsx (windows:setQuickMenuBottom) whenever it can move. Kept in
+// CSS pixels and turned into a screen position only when a window opens, so moving the main
+// window or changing its zoom after the last report still places correctly.
+let quickMenuCssBottom = 0;
+
+function setQuickMenuBottom(win, cssBottom) {
+  if (win !== mainWindow) return false;
+  quickMenuCssBottom = Math.max(0, Number(cssBottom) || 0);
+  return true;
+}
+
+// A new child window opens at the BOTTOM-RIGHT of the main window's screen, its top edge never above
+// the main window's Quick Menu bar (per the user, 2026-10-22: "any screen that open should not hide
+// the quick menu buttons"). If it doesn't fit below the bar at its default height it is made
+// shorter, down to MIN_CHILD_HEIGHT. Each further open window steps STEP up-left from the corner,
+// so the one underneath still peeks out — two windows at exactly the same spot look as if the first
+// had been minimized (reported by the user, 2026-09-07) — but never above the bar; with no room
+// left to step on an axis, windows share that edge.
+const MIN_CHILD_HEIGHT = 360;
+const STEP = 32;
+// Breathing room between the Quick Menu bar and a window's top edge.
+const BAR_GAP = 8;
+// On Linux (GNOME/Mutter) the title bar is drawn ABOVE the bounds a window is given — getBounds()
+// equals getContentBounds() there — so a window placed exactly at the bar still had ~40px of title
+// bar over the Quick Menu row (reported by the user, 2026-10-22, at 75% zoom). On Windows the frame
+// is part of the bounds already, so nothing is added.
+const TITLE_BAR_ALLOWANCE = process.platform === 'linux' ? 40 : 0;
+
+function childPlacement(width, height) {
+  const mainUsable = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
+  const display = mainUsable ? screen.getDisplayMatching(mainWindow.getBounds()) : screen.getPrimaryDisplay();
+  const work = display.workArea;
+  const workBottom = work.y + work.height;
+  const workRight = work.x + work.width;
+
+  let top = work.y;
+  if (mainUsable && quickMenuCssBottom > 0) {
+    const barBottom = mainWindow.getContentBounds().y + Math.round(quickMenuCssBottom * mainWindow.webContents.getZoomFactor());
+    top = Math.min(Math.max(work.y, barBottom + BAR_GAP + TITLE_BAR_ALLOWANCE), workBottom - MIN_CHILD_HEIGHT);
+  }
+
+  const w = Math.min(width, work.width);
+  const h = Math.max(Math.min(height, workBottom - top), Math.min(MIN_CHILD_HEIGHT, work.height));
+  const stepsX = Math.floor((work.width - w) / STEP) + 1;
+  const stepsY = Math.max(1, Math.floor((workBottom - top - h) / STEP) + 1);
+  const n = childWindows.size;
+  return {
+    x: workRight - w - (n % stepsX) * STEP,
+    y: workBottom - h - (n % stepsY) * STEP,
+    width: w,
+    height: h,
+  };
 }
 
 // `page`/`tab` become a URL query string the fresh window's own AppContext reads on mount
@@ -113,13 +151,48 @@ function nextCascadePosition(width, height) {
 // print-preview window returning to the report's filter window rather than to the main window.
 const openerOf = new WeakMap();
 
+// One window per screen (per the user, 2026-10-22): clicking Receipt while a Receipt window is open
+// brings that window forward instead of opening a duplicate. A window is known by what it was
+// OPENED for — page, tab and params — so two different filtered views (customer A's ledger, then
+// customer B's) are still two windows, while the same request twice is one.
+const childByKey = new Map();
+
+function windowKey(page, tab, params = {}) {
+  const sortedParams = Object.keys(params).sort().map((k) => [k, String(params[k])]);
+  return JSON.stringify([page, tab || '', sortedParams]);
+}
+
+// Restore + raise + focus, the same way a new child comes up (showChild), so it also lands on top
+// where GNOME's focus-stealing prevention refuses the focus itself.
+function bringChildForward(win) {
+  // Still loading (a quick double-click) — it is about to show itself on top anyway.
+  if (!win.isVisible() && !win.isMinimized()) return;
+  if (win.isMinimized()) win.restore();
+  childWindows.delete(win);
+  childWindows.add(win);
+  showChild(win);
+}
+
+function openChildWindow(page, tab, { params = {}, opener = null } = {}) {
+  const key = windowKey(page, tab, params);
+  const existing = childByKey.get(key);
+  if (existing && !existing.isDestroyed()) {
+    bringChildForward(existing);
+    return existing;
+  }
+  const win = createAppWindow(page, tab, { child: true, params, opener });
+  childByKey.set(key, win);
+  win.on('closed', () => { if (childByKey.get(key) === win) childByKey.delete(key); });
+  return win;
+}
+
 function createAppWindow(page, tab, { child = false, params = {}, opener = null } = {}) {
   const width = child ? 1000 : 1280;
   const height = child ? 720 : 800;
   const win = new BrowserWindow({
-    width,
-    height,
-    ...nextCascadePosition(width, height),
+    // The main window is maximized as it is revealed (see reveal below); this is the size and spot
+    // it goes back to when un-maximized — centred on the screen.
+    ...(child ? childPlacement(width, height) : { width, height, center: true }),
     // Hidden until its first paint, on the app's own --app-bg (frontend/src/index.css) — a window
     // shown immediately flashed white, then the Login page, before landing on the page it was
     // opened for (reported by the user, 2026-09-30). The Login half of that is fixed in the
@@ -135,7 +208,15 @@ function createAppWindow(page, tab, { child = false, params = {}, opener = null 
 
   // ready-to-show never fires if the page fails to load, so a fallback timer makes sure a window
   // can never stay invisible.
-  const reveal = () => { if (child) showChild(win); else win.show(); };
+  // The main window opens maximized (per the user, 2026-10-22). Retried once shortly after: a Linux
+  // window manager ignores maximize() until it has actually mapped the window, which is still in
+  // flight right after show().
+  const reveal = () => {
+    if (child) { showChild(win); return; }
+    win.show();
+    win.maximize();
+    setTimeout(() => { if (!win.isDestroyed() && !win.isMaximized()) win.maximize(); }, 200);
+  };
   const showTimer = setTimeout(() => { if (!win.isDestroyed() && !win.isVisible()) reveal(); }, 3000);
   win.once('ready-to-show', () => { clearTimeout(showTimer); reveal(); });
   win.on('closed', () => clearTimeout(showTimer));
@@ -213,4 +294,4 @@ function closeChildAndFocusMain(win) {
   return true;
 }
 
-module.exports = { createAppWindow, closeChildAndFocusMain, listChildWindows, focusChildWindow };
+module.exports = { createAppWindow, openChildWindow, setQuickMenuBottom, closeChildAndFocusMain, listChildWindows, focusChildWindow };

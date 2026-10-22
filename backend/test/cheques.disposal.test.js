@@ -306,6 +306,87 @@ test('cheques: a bounce undoes the most recently ENTERED step even if an earlier
   assert.deepEqual(rows.map((r) => r.status), ['ACTIVE', 'REVERSED'], 'the back-dated 4000 was entered last, so it is the one undone');
 });
 
+test('cheques: two simultaneous full bounces (a double-click) reverse the receipt only once', async (t) => {
+  const { customer, created } = await setupChequeFixtures(t);
+  const { cheque, receiptId } = await makePostedChequeReceipt(customer, 1000);
+  created.receiptId = receiptId;
+  const receiptRows = async () => (await query("SELECT COUNT(*) AS n FROM dbo.ledger_entries WHERE source_type = 'RECEIPT' AND source_id = @id", { id: receiptId })).recordset[0].n;
+  const before = await receiptRows();
+
+  const results = await Promise.allSettled([
+    chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null),
+    chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null),
+  ]);
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1, 'exactly one bounce may win');
+  assert.equal(results.find((r) => r.status === 'rejected').reason.code, 'CHEQUE_CHANGED');
+  assert.equal(await receiptRows(), before + 2, 'ONE reversal pair, not two');
+});
+
+test('cheques: a Return of a bounced cheque racing its re-deposit leaves one consistent outcome', async (t) => {
+  const { customer, bank, created } = await setupChequeFixtures(t);
+  const { cheque, receiptId } = await makePostedChequeReceipt(customer, 1000);
+  created.receiptId = receiptId;
+  await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null);
+
+  const results = await Promise.allSettled([
+    chequesService.returnToSender(cheque.cheque_id, { returned_date: '2026-01-20' }, null),
+    chequesService.deposit(cheque.cheque_id, { amount: 1000, bank_id: bank.bank_id, allocation_date: '2026-01-20' }, null, undefined),
+  ]);
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1, 'exactly one action may win');
+  const after = await chequesService.getById(cheque.cheque_id);
+  const active = (await allocationRowsFor(receiptId)).filter((r) => r.status === 'ACTIVE');
+  if (after.cheque_status === 'RETURNED') assert.equal(active.length, 0, 'a returned cheque holds no live deposit');
+  else assert.equal(after.cheque_status, 'DEPOSITED');
+  const tb = await trialBalance();
+  assert.equal(tb.debit, tb.credit);
+});
+
+test('cheques: a bounce cannot be dated before the step it undoes, nor a re-use before the bounce', async (t) => {
+  const { customer, vendor, bank, created } = await setupChequeFixtures(t);
+  const { cheque, receiptId } = await makePostedChequeReceipt(customer, 3000);
+  created.receiptId = receiptId;
+  await chequesService.endorseToVendor(cheque.cheque_id, { vendor_id: vendor.vendor_id, allocation_date: '2026-01-15' }, null, undefined);
+  const [alloc] = await allocationRowsFor(receiptId);
+
+  await assert.rejects(
+    chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-14' }, null),
+    /before the endorsement it undoes \(15\/01\/2026\)/,
+  );
+  await assert.rejects(chequesService.bounceAllocation(alloc.allocation_id, { date: '2026-01-14' }), /before the endorsement/);
+  assert.equal((await allocationRowsFor(receiptId))[0].status, 'ACTIVE', 'a refused bounce must change nothing');
+
+  await chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null); // same day is fine
+  await assert.rejects(
+    chequesService.deposit(cheque.cheque_id, { amount: 3000, bank_id: bank.bank_id, allocation_date: '2026-01-14' }, null, undefined),
+    /before the bounce date \(15\/01\/2026\)/,
+  );
+  const redeposited = await chequesService.deposit(cheque.cheque_id, { amount: 3000, bank_id: bank.bank_id, allocation_date: '2026-01-15' }, null, undefined);
+  assert.equal(redeposited.cheque_status, 'DEPOSITED');
+});
+
+test('receipts: un-post and un-confirm are refused once the cheque has any history, even back on PENDING', async (t) => {
+  const { customer, vendor, created } = await setupChequeFixtures(t);
+
+  // Endorsed then returned: PENDING again, but its allocation history must keep the receipt posted.
+  const returned = await makePostedChequeReceipt(customer, 2000);
+  created.receiptId = returned.receiptId;
+  await chequesService.endorseToVendor(returned.cheque.cheque_id, { vendor_id: vendor.vendor_id, allocation_date: '2026-01-11' }, null, undefined);
+  const [alloc] = await allocationRowsFor(returned.receiptId);
+  await chequesService.reverseAllocation(alloc.allocation_id, { date: '2026-01-12' }, null);
+  assert.equal((await chequesService.getById(returned.cheque.cheque_id)).cheque_status, 'PENDING');
+  await assert.rejects(receiptsService.unpost(returned.receiptId, undefined), { code: 'CHEQUE_IN_USE' });
+  await assert.rejects(receiptsService.unconfirm(returned.receiptId, undefined), { code: 'CHEQUE_IN_USE' });
+  assert.equal((await receiptsService.getById(returned.receiptId)).status, 'CONFIRMED');
+});
+
+test('receipts: un-post of an untouched cheque receipt still works', async (t) => {
+  const { customer, created } = await setupChequeFixtures(t);
+  const { receiptId } = await makePostedChequeReceipt(customer, 1500);
+  created.receiptId = receiptId;
+  const unposted = await receiptsService.unpost(receiptId, undefined);
+  assert.equal(unposted.status, 'DRAFT');
+});
+
 test.after(async () => {
   await closePool();
 });

@@ -1368,7 +1368,7 @@ export default function StockVoucherPage() {
         <form
           id="sv-entry-form" ref={entryCardRef} onSubmit={handleSave}
           noValidate
-          className="card-white p-6 bg-white border flex flex-col" style={{ height: entryCardHeight ?? undefined }}
+          className="card-white p-6 bg-white border flex flex-col" style={{ minHeight: entryCardHeight ?? undefined }}
           data-edit-scope="detail"
         >
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-4">
@@ -1672,7 +1672,11 @@ export default function StockVoucherPage() {
           {/* Committed lines — read-only grid. Click a row to load it back into the entry strip
               above for editing. No per-row delete — that's the toolbar's own Delete button,
               enabled only while a row is selected. */}
-          <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+          {/* min-h-[140px] (about four lines), not min-h-0: in a short window the line-entry form opened
+              by Edit took every pixel the card had and the lines vanished (2026-10-22, once document
+              windows got shorter to clear the Quick Menu). Now the card grows past the window
+              instead — it is a minimum height, see above — and the page scrolls a little. */}
+          <div className="flex-1 min-h-[140px] mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>

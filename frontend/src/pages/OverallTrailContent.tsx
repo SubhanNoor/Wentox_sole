@@ -347,6 +347,26 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: '#047857' }}>{formatCurrency(filteredTotals.totalDebit)}</td>
               <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: '#e11d48' }}>({formatCurrency(filteredTotals.totalCredit)})</td>
             </tr>
+            {/* Difference — total debit minus total credit, under the description as on the legacy
+                printout (per the user, 2026-10-22). Credit-heavy shows in brackets, like every
+                credit figure in this report. */}
+            {(() => {
+              const difference = filteredTotals.totalDebit - filteredTotals.totalCredit;
+              return (
+                <tr style={{ fontWeight: 'bold' }}>
+                  <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>
+                    <span style={{ display: 'flex', justifyContent: 'flex-end', gap: '24px' }}>
+                      <span style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}>Difference:</span>
+                      <span style={{ fontFamily: 'monospace', minWidth: '110px', textAlign: 'right', color: difference < 0 ? '#e11d48' : '#047857' }}>
+                        {difference < 0 ? `(${formatCurrency(-difference)})` : formatCurrency(difference)}
+                      </span>
+                    </span>
+                  </td>
+                  <td style={{ border: '1px solid #000000' }} />
+                  <td style={{ border: '1px solid #000000' }} />
+                </tr>
+              );
+            })()}
           </tbody>
         </table>
 

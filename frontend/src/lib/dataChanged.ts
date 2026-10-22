@@ -12,7 +12,7 @@
 // read and announces nothing. Matched on the action half of `<feature>:<action>`.
 const WRITE_ACTIONS = new Set([
   'create', 'update', 'remove', 'reactivate', 'post', 'unpost', 'confirm', 'unconfirm',
-  'deposit', 'bounce', 'endorse-to-vendor', 'endorse-to-expense', 'return-to-sender', 'reverse-allocation',
+  'deposit', 'bounce', 'endorse-to-vendor', 'endorse-to-expense', 'return-to-sender', 'reverse-allocation', 'bounce-allocation',
   'mark-cleared', 'adjust', 'log-production', 'reduce-vendor-stock', 'run',
 ]);
 // `<feature>:run` is only a write for these (system reset, salary/wage runs are create/post).

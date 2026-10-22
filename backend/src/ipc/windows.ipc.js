@@ -2,7 +2,7 @@
 // (there's nothing to query; this only calls into Electron's own BrowserWindow via windowManager).
 const { ipcMain } = require('electron');
 const { BrowserWindow } = require('electron');
-const { createAppWindow, closeChildAndFocusMain, listChildWindows, focusChildWindow } = require('../../electron/windowManager');
+const { openChildWindow, setQuickMenuBottom, closeChildAndFocusMain, listChildWindows, focusChildWindow } = require('../../electron/windowManager');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -14,8 +14,9 @@ module.exports = function register() {
     requireSession();
     const page = payload?.page;
     if (!page) throw new Error('page is required');
-    createAppWindow(page, payload?.tab, {
-      child: true, params: payload?.params, opener: BrowserWindow.fromWebContents(event.sender),
+    // Brings an already-open window for the same screen forward instead of duplicating it.
+    openChildWindow(page, payload?.tab, {
+      params: payload?.params || {}, opener: BrowserWindow.fromWebContents(event.sender),
     });
     return { ok: true };
   }));
@@ -25,6 +26,13 @@ module.exports = function register() {
   ipcMain.handle('windows:closeSelf', wrap((_payload, event) => {
     const closed = closeChildAndFocusMain(BrowserWindow.fromWebContents(event.sender));
     return { closed };
+  }));
+
+  // The main window reports where its Quick Menu bar ends, so new windows open below it
+  // (windowManager.js#childPlacement). Ignored from any other window.
+  ipcMain.handle('windows:setQuickMenuBottom', wrap((payload, event) => {
+    requireSession();
+    return { accepted: setQuickMenuBottom(BrowserWindow.fromWebContents(event.sender), payload?.bottom) };
   }));
 
   // The main window's "Open Windows" list: every open child window, and bringing one forward.

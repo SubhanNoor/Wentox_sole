@@ -8938,3 +8938,46 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
 - **What was wrong:** the Cash Book for a day also printed postings from other dates. A cheque endorsed on 10 Oct and returned on 15 Oct share one `source_id`, so the 15 Oct book also printed the 10 Oct endorsement. Bounced receipts behave the same way.
 - **Fix:** `cashBookTransactionSides()` in `src/repositories/reports.repository.js` now applies the same date window to the rows it returns, not only to the step that finds which documents qualify. Both lines of a posting always carry the same date, so no posting is split.
 - **Verified:** the new `test/cashBook.dateWindow.test.js` fails without the fix and passes with it. It checks 10 Jan, 15 Jan and the range 10–15 Jan. Full backend suite 39/39.
+
+### 2026-10-22 — Follow-ups to the one-step bounce
+- **Fixed:**
+  1. **Other windows didn't refresh after Mark Bounced on the Returns tab:** `bounce-allocation` added to `WRITE_ACTIONS` in `frontend/src/lib/dataChanged.ts`.
+  2. **Un-post / un-confirm of a receipt whose cheque has history:** a cheque can land on PENDING again after a one-step bounce or a returned endorsement. Un-posting it then deleted the bounce reversal and re-credit rows with the receipt's own, and un-confirm deleted the cheques row. New `assertChequeUntouched()` in `receipts.service.js` also refuses (`CHEQUE_IN_USE`) when the cheque has a `bounced_date` or any allocation row, active or reversed.
+  3. **Dates running backwards:** a bounce can't be dated before the deposit/endorsement it undoes (`bounceAllocation`, so both the Disposal and Returns paths), and a deposit/endorsement of a cheque with a `bounced_date` can't be dated before it. Same day is allowed. New `assertNotBefore()` in `cheques.service.js`.
+- **Files:** `src/services/cheques.service.js`, `src/services/receipts.service.js`, `test/cheques.disposal.test.js`, `frontend/src/lib/dataChanged.ts`.
+- **Verified:** migration 044 applied to `wentox_test`; backend suite 42/42 (3 new tests); `tsc -b` clean.
+- **Also fixed (same day): a double-click bounced a cheque in hand twice.** Two simultaneous full bounces both passed the "already bounced?" check (a pool read before the transaction) and both reversed the receipt — the customer's due went up twice (reproduced on `wentox_test`: 6 RECEIPT rows instead of 4).
+  - New `lockIfStatusIn()` in `cheques.repository.js`: a no-op UPDATE that locks the cheque row and reports whether its status is still the one read. `reverseCheque()` (bounce + return to sender) runs it first in its transaction; deposit/endorse run it right after `recreditIfBounced()`, so a re-use that loses a race against a Return stops too. The loser gets `CHEQUE_CHANGED` ("refresh and try again").
+  - Frontend: new `hooks/useInFlight.ts`; the Confirm buttons on the Disposal tab (Save Allocation, Confirm Bounce, Confirm Return) and the Returns tab (both dialogs) ignore a second click while the first is saving, and show disabled.
+  - **Files:** `src/repositories/cheques.repository.js`, `src/services/cheques.service.js`, `test/cheques.disposal.test.js`, `frontend/src/hooks/useInFlight.ts`, `frontend/src/components/ChequesTab.tsx`, `frontend/src/pages/ChequeReturnsContent.tsx`.
+  - **Verified:** backend suite 44/44 (2 new race tests); cheque tests 3 runs in a row 16/16; `tsc -b` clean; no new lint errors.
+
+### 2026-10-22 — One window per screen
+- **What:** clicking a screen that is already open in its own window (e.g. Receipt) now brings that window forward instead of opening a duplicate. A minimized one is restored. A double-click while it is still loading opens just one.
+- **How:** `windowManager.js#openChildWindow()` remembers each child by what it was opened for (page + tab + params, params sorted). The same request again → `bringChildForward()` (restore, raise, focus, same path as a new child's `showChild()`); otherwise a new window as before. Windows opened with different filters (customer A's ledger vs customer B's) are still separate windows. `windows:open` calls it instead of `createAppWindow()` directly.
+- **Files:** `electron/windowManager.js`, `src/ipc/windows.ipc.js`, `e2e/childWindows.reuse.e2e.js` (new).
+- **Verified:** new e2e test fails without the change, passes with it; `childWindows.onTop.e2e.js` still passes.
+
+### 2026-10-22 — New windows open below the Quick Menu, bottom-right
+- **What:** every new screen window opens at the bottom-right of the main window's screen, with its top edge below the main window's Quick Menu bar, so the Quick Menu buttons are never hidden. If it doesn't fit at its default 720px height it is made shorter (minimum 360px). Each further window steps 32px up-left from the corner so the one underneath peeks out, but never above the bar. Maximize is left as normal OS behaviour.
+- **How:** `AppLayout.tsx` (main window only) reports where the Quick Menu bar ends, in CSS px, over the new `windows:setQuickMenuBottom` channel — on mount and whenever the bar or anything above it resizes, the window resizes, or zoom changes. `windowManager.js#childPlacement()` turns that into a screen position at open time (main window's content top + bottom × zoom factor), on the display the main window is on. The main window itself still uses `nextCascadePosition()`.
+- **Files:** `electron/windowManager.js`, `src/ipc/windows.ipc.js`, `frontend/src/lib/api.ts`, `frontend/src/components/AppLayout.tsx`, `e2e/childWindows.placement.e2e.js` (new).
+- **Verified:** new e2e test (bar ends at y=179 → first window top 179, right- and bottom-aligned, height 685; second window steps left, still below the bar); reuse + on-top e2e tests still pass; `tsc -b` clean, no new lint errors.
+- **Follow-up (same day): title bar still covered the Quick Menu on Ubuntu.** GNOME draws a window's title bar above the bounds Electron gives it (`getBounds()` == `getContentBounds()`), so a window placed exactly at the bar still had ~40px of title bar over the Quick Menu row (user's screenshot, 75% zoom). `childPlacement()` now adds `TITLE_BAR_ALLOWANCE` (40 on Linux, 0 on Windows, where the frame is inside the bounds) plus an 8px `BAR_GAP`; windows get shorter, never narrower. The e2e test now checks where the title bar starts and also runs at 75% zoom (bar 172 → window top 221, height 643). 5/5 window e2e tests pass.
+
+### 2026-10-22 — Main window opens maximized
+- **What:** the app's main window now opens maximized; un-maximizing it goes back to 1280×800, centred.
+- **How:** `windowManager.js` reveal: `show()` then `maximize()`, retried once 200ms later — on Linux the window manager ignores `maximize()` until it has mapped the window (verified: the call at show time alone left it un-maximized). Removed the now-unused `nextCascadePosition()` (children use `childPlacement()`).
+- **Files:** `electron/windowManager.js`, `e2e/childWindows.placement.e2e.js`.
+- **Verified:** new e2e check passes; all window e2e tests pass.
+
+### 2026-10-22 — Difference row on the trail reports
+- **What:** Overall Trail, Customer Balances and Vendor Balances (one component) now show a **Difference** row under Grand Total: total debit minus total credit, placed under the description like the legacy printout the user sent. Credit-heavy shows in brackets, like every credit figure in the report. On screen and in print (same table). Excel export unchanged — it already carries a difference column, total line included. Ledgers deliberately not touched (user decision: trail family only).
+- **Files:** `frontend/src/pages/OverallTrailContent.tsx`.
+- **Verified:** real app on `wentox_test` — Customer Balances: Grand Total 14,400 / (1,200) → Difference 13,200; Overall Trail (all accounts) → 0, as a full trial balance must. `tsc -b` clean, no new lint errors.
+
+### 2026-10-22 — Line grid keeps its height in a short window
+- **What was wrong:** after document windows got shorter (to open below the Quick Menu), editing a line on Sale Bill / Sale Return let the line-entry form take every pixel of the window-sized card, and the grid of lines collapsed to ~14px. Caught by `e2e/masterDetail.e2e.js` (Sale Bill + Sale Return failed; both pass on the 1.9.0 commit).
+- **Fix:** on all five line-grid pages (Sale Bill, Sale Return, Purchase, Purchase Return, Stock Voucher) the card's measured height is now a `minHeight` instead of a fixed `height`, and the grid is `min-h-[140px]` (about four lines) instead of `min-h-0`. A tall window looks exactly as before; a short one scrolls a little instead of hiding the lines.
+- **Files:** `frontend/src/pages/SaleBillPage.tsx`, `SaleReturnPage.tsx`, `PurchasePage.tsx`, `PurchaseReturnPage.tsx`, `StockVoucherPage.tsx`.
+- **Verified:** grid holds 140px while editing a line in a 637px window (was 14px); full e2e 32/32; backend 44/44; `tsc -b` clean.

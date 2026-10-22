@@ -2010,6 +2010,7 @@ declare global {
         closeSelf: () => Promise<ApiResult<{ closed: boolean }>>;
         list: () => Promise<ApiResult<OpenWindowRow[]>>;
         focus: (payload: { id: number }) => Promise<ApiResult<{ focused: boolean }>>;
+        setQuickMenuBottom: (payload: { bottom: number }) => Promise<ApiResult<{ accepted: boolean }>>;
       };
       systemReset: {
         run: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
@@ -2597,6 +2598,13 @@ export async function listOpenWindows(): Promise<ApiResult<OpenWindowRow[]>> {
 export async function focusOpenWindow(id: number): Promise<ApiResult<{ focused: boolean }>> {
   if (!window.api) return NO_BRIDGE;
   return window.api.windows.focus({ id });
+}
+
+// The main window's Quick Menu bar ends `bottom` CSS pixels from the top of its page — new windows
+// open below it so they never cover its buttons (backend electron/windowManager.js#childPlacement).
+export async function reportQuickMenuBottom(bottom: number): Promise<ApiResult<{ accepted: boolean }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.windows.setQuickMenuBottom({ bottom });
 }
 
 export async function updateCredentials(payload: { currentPassword: string; username?: string; newPassword?: string }): Promise<ApiResult<{ username: string }>> {

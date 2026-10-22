@@ -6,6 +6,7 @@ import { Search, AlertTriangle, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
+import { useInFlight } from '@/hooks/useInFlight';
 import type { ChequeRow, ChequeAllocationRow, ChequeStatus, ChequeDispositionType, VendorRow, BankAccountRow, BusinessAccountRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
@@ -30,6 +31,8 @@ const DISPOSITION_LABELS: Record<ChequeDispositionType, string> = {
 };
 
 export default function ChequesTab() {
+  // Confirm buttons ignore a second click while the first is still saving.
+  const [saving, runOnce] = useInFlight();
   // Re-runs the loads below when another window saves something (live update, 2026-10-15).
   const dataVersion = useDataVersion();
   const [cheques, setCheques] = useState<ChequeRow[]>([]);
@@ -746,8 +749,9 @@ export default function ChequesTab() {
               </button>
               <button
                 type="submit"
-                onClick={saveAllocation}
-                className="px-4 py-2 text-sm rounded-lg bg-[#111c2a] text-[#B08D57] hover:opacity-90"
+                onClick={() => runOnce(saveAllocation)}
+                disabled={saving}
+                className="disabled:opacity-50 px-4 py-2 text-sm rounded-lg bg-[#111c2a] text-[#B08D57] hover:opacity-90"
               >
                 Save Allocation
               </button>
@@ -791,8 +795,9 @@ export default function ChequesTab() {
               </button>
               <button
                 type="submit"
-                onClick={confirmBounce}
-                className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
+                onClick={() => runOnce(confirmBounce)}
+                disabled={saving}
+                className="disabled:opacity-50 px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700"
               >
                 Confirm Bounce
               </button>
@@ -837,8 +842,9 @@ export default function ChequesTab() {
               </button>
               <button
                 type="submit"
-                onClick={confirmReturn}
-                className="px-4 py-2 text-sm rounded-lg bg-slate-700 text-white hover:bg-slate-800"
+                onClick={() => runOnce(confirmReturn)}
+                disabled={saving}
+                className="disabled:opacity-50 px-4 py-2 text-sm rounded-lg bg-slate-700 text-white hover:bg-slate-800"
               >
                 Confirm Return
               </button>

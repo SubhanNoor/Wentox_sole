@@ -79,6 +79,37 @@ async function recomputeStatus(transaction, cheque, closingDispositionType) {
   }
 }
 
+// A DATE column comes back from the driver as UTC midnight, a payload date as 'YYYY-MM-DD' — both
+// reduced to 'YYYY-MM-DD' so they compare as plain strings.
+function isoDay(value) {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+}
+
+function displayDay(value) {
+  const [y, m, d] = isoDay(value).split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// Dates never run backwards across a bounce (2026-10-22): an undo dated before the step it undoes,
+// or a re-use dated before the bounce, would show the money coming back before it left — CHEQUES
+// IN HAND dips negative in between and the Cash Book / party ledgers read out of order.
+function assertNotBefore(date, earliest, what) {
+  if (earliest && isoDay(date) < isoDay(earliest)) {
+    throw ApiError.badRequest(`Date cannot be before the ${what} (${displayDay(earliest)})`);
+  }
+}
+
+// Holds the cheque row for the rest of the transaction and refuses if another action (a second
+// click, another window) changed its status since this call read it — see
+// repository.lockIfStatusIn. Without it two simultaneous bounces both reversed the receipt.
+async function lockStatus(transaction, chequeId, statuses) {
+  if (!(await repository.lockIfStatusIn(transaction, chequeId, statuses))) {
+    throw ApiError.conflict('This cheque was just changed by another action — refresh and try again', 'CHEQUE_CHANGED');
+  }
+}
+
+const OPEN_STATUSES = ['PENDING', 'PARTIALLY_ENDORSED', 'DEPOSITED', 'ENDORSED'];
+
 // A BOUNCED cheque has had its allocations AND its receipt reversed (reverseCheque), so the customer
 // is no longer credited and CHEQUES IN HAND holds nothing for it. Before it can be deposited or
 // endorsed again the receipt's own effect has to come back — the exact mirror of the receipt
@@ -149,8 +180,12 @@ async function deposit(chequeId, payload, userId, session) {
   // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
+  assertNotBefore(payload.allocation_date, cheque.bounced_date, 'bounce date');
+
   await withTransaction(async (transaction) => {
     await recreditIfBounced(transaction, cheque, payload.allocation_date);
+    // After the re-credit's own reads: a lost re-use race against a Return lands here and stops.
+    await lockStatus(transaction, cheque.cheque_id, OPEN_STATUSES);
     const allocationId = await repository.insertAllocation(transaction, {
       receipt_id: cheque.receipt_id,
       disposition_type: 'DEPOSIT',
@@ -189,8 +224,12 @@ async function endorseToVendor(chequeId, payload, userId, session) {
   // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
+  assertNotBefore(payload.allocation_date, cheque.bounced_date, 'bounce date');
+
   await withTransaction(async (transaction) => {
     await recreditIfBounced(transaction, cheque, payload.allocation_date);
+    // After the re-credit's own reads: a lost re-use race against a Return lands here and stops.
+    await lockStatus(transaction, cheque.cheque_id, OPEN_STATUSES);
     const allocationId = await repository.insertAllocation(transaction, {
       receipt_id: cheque.receipt_id,
       disposition_type: 'VENDOR_PAYMENT',
@@ -226,8 +265,12 @@ async function endorseToExpense(chequeId, payload, userId, session) {
   // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
+  assertNotBefore(payload.allocation_date, cheque.bounced_date, 'bounce date');
+
   await withTransaction(async (transaction) => {
     await recreditIfBounced(transaction, cheque, payload.allocation_date);
+    // After the re-credit's own reads: a lost re-use race against a Return lands here and stops.
+    await lockStatus(transaction, cheque.cheque_id, OPEN_STATUSES);
     const allocationId = await repository.insertAllocation(transaction, {
       receipt_id: cheque.receipt_id,
       disposition_type: 'EXPENSE_PAYMENT',
@@ -300,6 +343,7 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
+    await lockStatus(transaction, chequeId, [cheque.cheque_status]);
     const reversedAllocations = alreadyReversed ? [] : await repository.reverseAllocations(transaction, cheque.receipt_id);
 
     for (const allocation of reversedAllocations) {
@@ -432,6 +476,7 @@ async function bounceAllocation(allocationId, payload) {
     throw ApiError.conflict(`This cheque is already ${allocation.cheque_status.toLowerCase()}`, 'CHEQUE_TERMINAL');
   }
   if (!payload.date) throw ApiError.badRequest('date is required');
+  assertNotBefore(payload.date, allocation.allocation_date, allocation.disposition_type === 'DEPOSIT' ? 'deposit it undoes' : 'endorsement it undoes');
   return undoAllocation(allocation, { date: payload.date, remarks: payload.remarks, bounced: true });
 }
 

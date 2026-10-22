@@ -134,6 +134,22 @@ async function claimBouncedForReuse(transaction, chequeId) {
   return result.rowsAffected[0] > 0;
 }
 
+// Locks the cheque row for the rest of `transaction` and reports whether its status is still one of
+// `statuses`. Every caller checks the status on a pool read BEFORE its transaction opens, so two
+// simultaneous actions both pass that check; this no-op UPDATE is where the second one waits for
+// the first to commit and then finds the status has moved on. Once it has run, no pool read of
+// this cheque row may follow inside the same transaction — it would wait on our own lock.
+async function lockIfStatusIn(transaction, chequeId, statuses) {
+  const params = { chequeId: { type: sql.Int, value: chequeId } };
+  statuses.forEach((status, i) => { params[`status${i}`] = { type: sql.VarChar(20), value: status }; });
+  const request = requestWithParams(transaction, params);
+  const result = await request.query(
+    `UPDATE dbo.cheques SET cheque_status = cheque_status
+     WHERE cheque_id = @chequeId AND cheque_status IN (${statuses.map((_, i) => `@status${i}`).join(', ')})`,
+  );
+  return result.rowsAffected[0] > 0;
+}
+
 async function markBounced(transaction, chequeId, bouncedDate) {
   const request = requestWithParams(transaction, {
     chequeId: { type: sql.Int, value: chequeId },
@@ -415,7 +431,7 @@ async function insertLedgerEntries(transaction, rows) {
 
 module.exports = {
   insert, updateDetails, deleteCheque, findById, findByReceiptId, list, setBank, setStatus,
-  markBounced, claimBouncedForReuse, setBouncedDate, findLatestActiveAllocation, markReturned, insertAllocation, findAllocationByExpenseId, listAllocations,
+  markBounced, claimBouncedForReuse, lockIfStatusIn, setBouncedDate, findLatestActiveAllocation, markReturned, insertAllocation, findAllocationByExpenseId, listAllocations,
   detachAllocationFromExpense, findAnyAllocationByExpenseId,
   findAllocationById, listEndorsedAllocations, sumActiveAllocations,
   sumActiveAllocationsInTransaction, reverseAllocations, reverseOneAllocation, insertLedgerEntries,

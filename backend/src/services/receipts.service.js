@@ -270,6 +270,20 @@ async function post(receiptId, session) {
   return getById(receiptId);
 }
 
+// A CHEQUE receipt can only be un-posted / un-confirmed while its cheque has no history at all.
+// PENDING alone is not enough since bounces went one step back (2026-10-22): a cheque that was
+// deposited/endorsed and then bounced or returned lands on PENDING again, yet its RECEIPT rows now
+// include bounce reversals and re-credits (deleted with the receipt's own, wiping the bounce from
+// the ledger), and un-confirm would delete the cheques row its allocation history hangs off.
+async function assertChequeUntouched(receipt) {
+  if (receipt.payment_mode !== 'CHEQUE' || !receipt.cheque_status) return;
+  const inUse = () => ApiError.conflict('This cheque has already been disposed of — reverse that first', 'CHEQUE_IN_USE');
+  if (receipt.cheque_status !== 'PENDING') throw inUse();
+  const cheque = await chequesRepository.findByReceiptId(receipt.receipt_id);
+  if (cheque && cheque.bounced_date) throw inUse();
+  if ((await chequesRepository.listAllocations(receipt.receipt_id)).length > 0) throw inUse();
+}
+
 // Blocked once the underlying cheque has moved past PENDING (deposited/endorsed/etc. — unposting
 // at that point would leave cheque_allocations pointing at ledger rows that no longer exist).
 async function unpost(receiptId, session) {
@@ -278,9 +292,7 @@ async function unpost(receiptId, session) {
   if (receipt.status !== 'CONFIRMED') {
     throw ApiError.conflict('Receipt is not posted', 'NOT_POSTED');
   }
-  if (receipt.payment_mode === 'CHEQUE' && receipt.cheque_status && receipt.cheque_status !== 'PENDING') {
-    throw ApiError.conflict('This cheque has already been disposed of — reverse that first', 'CHEQUE_IN_USE');
-  }
+  await assertChequeUntouched(receipt);
 
   await withTransaction(async (transaction) => {
     await repository.deleteLedgerEntries(transaction, receiptId);
@@ -311,9 +323,7 @@ async function unconfirm(receiptId, session) {
   if (receipt.status !== 'CONFIRMED') {
     throw ApiError.conflict('Receipt is not posted', 'NOT_POSTED');
   }
-  if (receipt.payment_mode === 'CHEQUE' && receipt.cheque_status && receipt.cheque_status !== 'PENDING') {
-    throw ApiError.conflict('This cheque has already been disposed of — reverse that first', 'CHEQUE_IN_USE');
-  }
+  await assertChequeUntouched(receipt);
 
   const draftId = await withTransaction(async (transaction) => {
     await repository.deleteLedgerEntries(transaction, receiptId);

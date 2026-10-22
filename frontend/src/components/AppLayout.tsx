@@ -141,6 +141,30 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   // MenuBar does its own role filtering, and a dropdown that opens fresh each time has no scroll
   // position to remember.
 
+  // The main window tells Electron where its Quick Menu bar ends, so every new window opens below it
+  // and never hides its buttons (per the user, 2026-10-22). Re-reported whenever the bar can move:
+  // its own size (pins wrapping), anything above it changing height (header, menu bar), a window
+  // resize, or a zoom change (which resizes the viewport).
+  const quickMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (IS_CHILD_WINDOW) return;
+    const bar = quickMenuRef.current;
+    if (!bar) return;
+    let last = -1;
+    const report = () => {
+      const bottom = Math.round(bar.getBoundingClientRect().bottom);
+      if (bottom === last) return;
+      last = bottom;
+      void api.reportQuickMenuBottom(bottom);
+    };
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(bar);
+    for (let el = bar.previousElementSibling; el; el = el.previousElementSibling) observer.observe(el);
+    window.addEventListener('resize', report);
+    return () => { observer.disconnect(); window.removeEventListener('resize', report); };
+  }, []);
+
   // A child window is titled by its own page (and sub-tab), not just "Wentox" — Electron mirrors
   // document.title onto the window, so it names the window in the taskbar and in the main window's
   // Open Windows list (OpenWindowsMenu.tsx).
@@ -565,6 +589,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
 
         {/* Top Quick Access Shortcut Drop Zone / Menu Bar */}
         <div
+          ref={quickMenuRef}
           data-no-print
           onDragOver={(e) => {
             e.preventDefault();

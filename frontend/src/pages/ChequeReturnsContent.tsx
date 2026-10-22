@@ -5,6 +5,7 @@ import { formatDate } from '@/lib/utils';
 import { AlertTriangle, RotateCcw, Search } from 'lucide-react';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import * as api from '@/lib/api';
+import { useInFlight } from '@/hooks/useInFlight';
 import type { ChequeAllocationRow, ChequeDispositionType, IssuedChequeRow } from '@/lib/api';
 import { useDataVersion } from '@/hooks/useDataVersion';
 
@@ -35,6 +36,8 @@ interface UnifiedRow {
 }
 
 export function ChequeReturnsContent() {
+  // Confirm buttons ignore a second click while the first is still saving.
+  const [saving, runOnce] = useInFlight();
   // Re-runs the loads below when another window saves something (live update, 2026-10-15).
   const dataVersion = useDataVersion();
   const [allocations, setAllocations] = useState<ChequeAllocationRow[]>([]);
@@ -324,8 +327,9 @@ export function ChequeReturnsContent() {
               </button>
               <button
                 type="submit"
-                onClick={confirmReturn}
-                className={`px-4 py-2 text-sm rounded-lg text-white ${allocMode === 'BOUNCE' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-700 hover:bg-slate-800'}`}
+                onClick={() => runOnce(confirmReturn)}
+                disabled={saving}
+                className={`disabled:opacity-50 px-4 py-2 text-sm rounded-lg text-white ${allocMode === 'BOUNCE' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-700 hover:bg-slate-800'}`}
               >
                 {allocMode === 'BOUNCE' ? 'Confirm Bounce' : 'Confirm Return'}
               </button>
@@ -384,8 +388,9 @@ export function ChequeReturnsContent() {
               </button>
               <button
                 type="submit"
-                onClick={confirmIssuedAction}
-                className={`px-4 py-2 text-sm rounded-lg text-white ${issuedAction.mode === 'BOUNCED' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-700 hover:bg-slate-800'}`}
+                onClick={() => runOnce(confirmIssuedAction)}
+                disabled={saving}
+                className={`disabled:opacity-50 px-4 py-2 text-sm rounded-lg text-white ${issuedAction.mode === 'BOUNCED' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-700 hover:bg-slate-800'}`}
               >
                 {issuedAction.mode === 'BOUNCED' ? 'Confirm Bounce' : 'Confirm Return'}
               </button>

@@ -2010,7 +2010,7 @@ const nextSystemBillNo = useMemo(
             control strip as the Edit button it modifies (per the user, 2026-09-04). */}
         <EditScopeRadios name="sale-bill-edit-scope" value={editScope} onChange={setEditScope} />
 
-        {/* Invoice Layout — height pinned to the remaining viewport space (see invoiceCardHeight
+        {/* Invoice Layout — at least the remaining viewport space (a minimum, so a short window scrolls rather than squashing the lines) (see invoiceCardHeight
             above) and laid out as a flex column, so the item table below can flex-grow into
             whatever room that leaves and the footer lands at the bottom of the screen instead of
             wherever the old fixed-height table happened to end. Every other child here keeps its
@@ -2019,7 +2019,7 @@ const nextSystemBillNo = useMemo(
           ref={invoiceCardRef}
           className="card-white shadow-sm p-3 md:p-4 flex flex-col"
           data-edit-scope="detail"
-          style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', height: invoiceCardHeight ?? undefined, position: 'relative' }}
+          style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', minHeight: invoiceCardHeight ?? undefined, position: 'relative' }}
         >
 
           {/* Print Title (Visible only when printing) */}
@@ -2546,7 +2546,11 @@ const nextSystemBillNo = useMemo(
               the bill is already posted — see handleRowClick). No per-row delete button, per
               pages_design.md §4 — deleting a line item is the toolbar's own Delete button,
               enabled only while a row is selected here. */}
-          <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+          {/* min-h-[140px] (about four lines), not min-h-0: in a short window the line-entry form opened
+              by Edit took every pixel the card had and the lines vanished (2026-10-22, once document
+              windows got shorter to clear the Quick Menu). Now the card grows past the window
+              instead — it is a minimum height, see above — and the page scrolls a little. */}
+          <div className="flex-1 min-h-[140px] mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-[11px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>
