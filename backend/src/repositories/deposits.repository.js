@@ -97,9 +97,13 @@ async function setStatus(transaction, depositId, status, updatedBy) {
     status: { type: sql.VarChar(10), value: status },
     updatedBy: { type: sql.Int, value: updatedBy ?? null },
   });
-  await request.query(
-    'UPDATE dbo.deposits SET status = @status, updated_by = @updatedBy WHERE deposit_id = @depositId',
+  // Conditional, like settlements.repository.js#setStatus: the row count tells the caller whether
+  // THIS call made the change. A double-clicked post/unpost passes the service's status check twice
+  // (it reads before the transaction), so the second one is stopped here and rolls back its rows.
+  const result = await request.query(
+    'UPDATE dbo.deposits SET status = @status, updated_by = @updatedBy WHERE deposit_id = @depositId AND status <> @status',
   );
+  return result.rowsAffected[0];
 }
 
 // One ledger pair per deposit against the fixed MISC_ADJUSTMENTS chart account (resolved by the

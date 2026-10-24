@@ -776,7 +776,11 @@ async function cashBookChequeDeposits({ date_from, date_to }) {
      JOIN dbo.business_accounts rc_ba ON rc_ba.ba_id = rc.ba_id
      LEFT JOIN dbo.cheques ch ON ch.cheque_id = rc.cheque_id
      LEFT JOIN dbo.bank_accounts bank ON bank.bank_id = ca.bank_id
-     WHERE ca.status = 'ACTIVE' AND ca.disposition_type = 'DEPOSIT'
+     -- Every deposit on its own date, REVERSED ones included: a deposit bounced on a later day
+     -- still happened on this one, and this day's grid prints its posting. Filtering to ACTIVE made
+     -- a later bounce reach back and drop it from this panel (nothing written is ever removed from
+     -- a past day's book — per the user, 2026-10-24).
+     WHERE ca.disposition_type = 'DEPOSIT'
        AND ca.allocation_date >= @dateFrom AND ca.allocation_date <= @dateTo
      ORDER BY ca.allocation_date, ca.allocation_id`,
     {
@@ -838,6 +842,11 @@ async function cashBookTransactionSides({ date_from, date_to }, { cashAcId, bank
          -- day's book and swamp every real movement. The balance it establishes is already carried
          -- by every account balance, and by Opening Cash on this very report.
          AND le.source_type <> 'OPENING'
+         -- is_internal (migration 045): bookkeeping kept on the ledgers but not a movement anyone
+         -- made that day — today only the re-credit a bounced cheque gets when it is used again
+         -- (cheques.service.js#recreditIfBounced). Printed, it made one hand-over read as two
+         -- entries (reported 2026-10-23). Reversals are NOT internal: they print on their own day.
+         AND le.is_internal = 0
        GROUP BY le.source_type, le.source_id
      )
      SELECT le.entry_id, le.source_type, le.source_id, le.entry_date,
@@ -881,6 +890,7 @@ async function cashBookTransactionSides({ date_from, date_to }, { cashAcId, bank
       -- without this the 15 Oct book also printed the 10 Oct postings. Both lines of one posting
       -- always carry the same date, so no posting is ever split by this.
       AND le.entry_date >= @dateFrom AND le.entry_date <= @dateTo
+      AND le.is_internal = 0
      LEFT JOIN dbo.business_accounts ba ON ba.ba_id = le.ba_id
      LEFT JOIN dbo.chart_of_accounts ca ON ca.ac_id = le.ac_id
      -- NATURAL POSTING ORDER (entry_id), not credit-first. One source document can hold more than

@@ -133,7 +133,7 @@ async function post(jvId, userId, session) {
     await repository.insertLedgerEntries(transaction, {
       jvId, jvDate: jv.jv_date, lines: jv.lines, reason: jv.reason,
     });
-    await repository.setStatus(transaction, jvId, 'CONFIRMED', userId);
+    if (!(await repository.setStatus(transaction, jvId, 'CONFIRMED', userId))) throw ApiError.conflict('Journal Voucher is already posted', 'ALREADY_POSTED');
   });
 
   return getById(jvId);
@@ -150,7 +150,7 @@ async function unpost(jvId, userId, session) {
 
   await withTransaction(async (transaction) => {
     await repository.deleteLedgerEntries(transaction, jvId);
-    await repository.setStatus(transaction, jvId, 'DRAFT', userId);
+    if (!(await repository.setStatus(transaction, jvId, 'DRAFT', userId))) throw ApiError.conflict('Journal Voucher is not posted', 'NOT_POSTED');
   });
 
   return getById(jvId);

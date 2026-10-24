@@ -121,15 +121,22 @@ async function setStatus(transaction, expenseId, status, userId) {
     status: { type: sql.VarChar(10), value: status },
     updatedBy: { type: sql.Int, value: userId ?? null },
   });
-  await request.query(
-    'UPDATE dbo.expenses SET status = @status, updated_by = @updatedBy WHERE expense_id = @expenseId',
+  // Conditional, like settlements.repository.js#setStatus: the row count tells the caller whether
+  // THIS call made the change. A double-clicked post/unpost passes the service's status check twice
+  // (it reads before the transaction), so the second one is stopped here and rolls back its rows.
+  const result = await request.query(
+    'UPDATE dbo.expenses SET status = @status, updated_by = @updatedBy WHERE expense_id = @expenseId AND status <> @status',
   );
+  return result.rowsAffected[0];
 }
 
 // DRAFT-only, enforced by the service — expenses is a transaction table, never soft-deleted.
 async function remove(transaction, expenseId) {
   const request = requestWithParams(transaction, { expenseId: { type: sql.Int, value: expenseId } });
-  await request.query('DELETE FROM dbo.expenses WHERE expense_id = @expenseId');
+  // Row count returned so unconfirm() can tell a second, concurrent unconfirm (row already gone)
+  // from the real one — otherwise both would leave a draft behind and the document came back twice.
+  const result = await request.query('DELETE FROM dbo.expenses WHERE expense_id = @expenseId');
+  return result.rowsAffected[0];
 }
 
 // Used by CASH/ONLINE/CHEQUE_ISSUED posting only — CHEQUE_ENDORSED's real ledger effect is owned
@@ -165,10 +172,14 @@ async function markIssuedChequeBounced(transaction, expenseId, bouncedDate) {
     expenseId: { type: sql.Int, value: expenseId },
     bouncedDate: { type: sql.Date, value: bouncedDate },
   });
-  await request.query(
+  // Conditional on PENDING and the count returned: the service checks PENDING before its
+  // transaction, so a double click on Bounce/Return used to post the reversal pair twice — the payee
+  // credited back two times over. The second call now matches nothing and rolls back.
+  const result = await request.query(
     `UPDATE dbo.expenses SET issued_cheque_status = 'BOUNCED', issued_cheque_bounced_date = @bouncedDate
-     WHERE expense_id = @expenseId`,
+     WHERE expense_id = @expenseId AND issued_cheque_status = 'PENDING'`,
   );
+  return result.rowsAffected[0];
 }
 
 // RETURNED — distinct from BOUNCED (a due-date issue or any other non-bounce reason), same
@@ -179,11 +190,12 @@ async function markIssuedChequeReturned(transaction, expenseId, returnedDate, re
     returnedDate: { type: sql.Date, value: returnedDate },
     reason: { type: sql.NVarChar(500), value: reason ?? null },
   });
-  await request.query(
+  const result = await request.query(
     `UPDATE dbo.expenses SET issued_cheque_status = 'RETURNED', issued_cheque_returned_date = @returnedDate,
        issued_cheque_return_reason = @reason
-     WHERE expense_id = @expenseId`,
+     WHERE expense_id = @expenseId AND issued_cheque_status = 'PENDING'`,
   );
+  return result.rowsAffected[0];
 }
 
 // "Cheque Return" page's issued-cheque list — CONFIRMED CHEQUE_ISSUED rows still PENDING (mirrors

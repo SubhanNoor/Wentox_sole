@@ -173,9 +173,13 @@ async function setStatus(transaction, jvId, status, updatedBy) {
     status: { type: sql.VarChar(10), value: status },
     updatedBy: { type: sql.Int, value: updatedBy ?? null },
   });
-  await request.query(
-    'UPDATE dbo.journal_vouchers SET status = @status, updated_by = @updatedBy WHERE jv_id = @jvId',
+  // Conditional, like settlements.repository.js#setStatus: the row count tells the caller whether
+  // THIS call made the change. A double-clicked post/unpost passes the service's status check twice
+  // (it reads before the transaction), so the second one is stopped here and rolls back its rows.
+  const result = await request.query(
+    'UPDATE dbo.journal_vouchers SET status = @status, updated_by = @updatedBy WHERE jv_id = @jvId AND status <> @status',
   );
+  return result.rowsAffected[0];
 }
 
 // One ledger_entries row per line — each line's own narration if given, else the header reason

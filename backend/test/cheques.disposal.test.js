@@ -318,7 +318,8 @@ test('cheques: two simultaneous full bounces (a double-click) reverse the receip
     chequesService.bounce(cheque.cheque_id, { bounced_date: '2026-01-15' }, null),
   ]);
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1, 'exactly one bounce may win');
-  assert.equal(results.find((r) => r.status === 'rejected').reason.code, 'CHEQUE_CHANGED');
+  // lockCheque (2026-10-24) re-reads the status first and names it; lockStatus is the backstop.
+  assert.ok(['CHEQUE_ALREADY_BOUNCED', 'CHEQUE_CHANGED'].includes(results.find((r) => r.status === 'rejected').reason.code));
   assert.equal(await receiptRows(), before + 2, 'ONE reversal pair, not two');
 });
 

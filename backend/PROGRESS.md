@@ -8981,3 +8981,23 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
 - **Fix:** on all five line-grid pages (Sale Bill, Sale Return, Purchase, Purchase Return, Stock Voucher) the card's measured height is now a `minHeight` instead of a fixed `height`, and the grid is `min-h-[140px]` (about four lines) instead of `min-h-0`. A tall window looks exactly as before; a short one scrolls a little instead of hiding the lines.
 - **Files:** `frontend/src/pages/SaleBillPage.tsx`, `SaleReturnPage.tsx`, `PurchasePage.tsx`, `PurchaseReturnPage.tsx`, `StockVoucherPage.tsx`.
 - **Verified:** grid holds 140px while editing a line in a 637px window (was 14px); full e2e 32/32; backend 44/44; `tsc -b` clean.
+
+### 2026-10-24 — One action, one entry: re-credit off the Cash Book, double-click guards
+- **What was wrong:**
+  - Endorsing two cheques that had bounced back to their customers printed four Cash Book entries (23/10). Each cheque showed its re-credit (`recreditIfBounced`) as well as the endorsement.
+  - A deposit later bounced dropped off its own day's Cheques Deposited panel.
+  - Every cheque action, and post/unpost of receipts, expenses, transfers, deposits and JVs, checked status on a pool read before its transaction. Two simultaneous calls therefore both wrote entries. Proved by the new tests against the old code: receipt posted twice, receipt reversed twice, issued cheque bounced twice.
+  - A receipt whose cheque had been used or bounced could be unposted, which deleted its reversal and re-credit rows.
+- **How:**
+  - Migration 045 adds `ledger_entries.is_internal`. The re-credit is written with it set and stays on the ledgers, and the Cash Book skips it. The migration flags re-credit rows already written. Reversals are not internal: they print on their own day. This replaces the 2026-10-23 narration filter.
+  - The Cheques Deposited panel lists every deposit on its own date, reversed ones included.
+  - `cheques.repository.js#lockCheque` takes an `sp_getapplock` per cheque. Deposit, endorse, bounce, return and undo re-check status, receipt status, remaining balance, and the expense already endorsed under it. Receipt unpost and unconfirm take the same lock.
+  - `reverseAllocations` flips ACTIVE rows only.
+  - `setStatus` for receipts, expenses, transfers, deposits and JVs is now conditional (`AND status <> @status`, same as settlements), and callers throw when nothing changed.
+  - Unconfirm checks that the row was really deleted.
+  - Issued-cheque bounce and return flip PENDING first, conditionally.
+  - Merged on top of 1.10.0's `lockStatus` / `assertChequeUntouched` (commit 05971624): both locks are kept (theirs refuses a changed status, `lockCheque` adds the balance / receipt-status / expense re-checks), and their receipt-history guard replaced mine. Receipt unpost and unconfirm additionally take `lockCheque` inside the transaction.
+  - `scripts/audit-double-entries.sql` is a read-only check for duplicates already in the data.
+- **Files:** `src/db/migrations/045_ledger_entries_is_internal.sql`, `src/repositories/{cheques,reports,receipts,expenses,transfers,deposits,journalVouchers}.repository.js`, `src/services/{cheques,receipts,expenses,transfers,deposits,journalVouchers}.service.js`, `test/cheques.noDoubleEntries.test.js`, `scripts/audit-double-entries.sql`.
+- **Verified:** the new suite passes 10/10, and 6 of those fail on the old code. Full backend suite 49/49 on `wentox_test`.
+- **Not covered:** sale bills, purchases and their returns, wage and salary runs, and stock vouchers have the same check-before-transaction shape. They were not changed in this pass.

@@ -62,6 +62,30 @@ async function assertDisposable(cheque, requestedAmount) {
   return amount;
 }
 
+// assertDisposable() again, inside the transaction and under the cheque's lock. The first check runs
+// on a pool read before the transaction opens, so two clicks on Deposit/Endorse both passed it and
+// both posted — the cheque allocated twice over. Here the second caller waits for the first to
+// commit and then sees its allocation. Returns the cheque as it stands NOW (fresh status), which is
+// what recreditIfBounced() must decide on: the pre-transaction read may say BOUNCED for a cheque the
+// first click has already re-credited and used.
+async function lockForDisposal(transaction, cheque, amount, expenseId = null) {
+  const { cheque_status: status, receipt_status: receiptStatus } = await repository.lockCheque(transaction, cheque.cheque_id);
+  if (receiptStatus !== 'CONFIRMED') {
+    throw ApiError.conflict('This receipt is not posted yet — post it before disposing of the cheque', 'RECEIPT_NOT_POSTED');
+  }
+  if (TERMINAL_STATUSES.includes(status)) {
+    throw ApiError.conflict(`This cheque is ${String(status).toLowerCase()} and cannot be disposed of further`, 'CHEQUE_TERMINAL');
+  }
+  if (expenseId && await repository.hasActiveAllocationForExpenseInTransaction(transaction, expenseId)) {
+    throw ApiError.conflict('This expense has already endorsed its cheque', 'ALREADY_POSTED');
+  }
+  const allocated = await repository.sumActiveAllocationsInTransaction(transaction, cheque.receipt_id);
+  if (amount > cheque.receipt_amount - allocated) {
+    throw ApiError.conflict('This cheque no longer has that much balance left — it was used in the meantime', 'CHEQUE_FULLY_ALLOCATED');
+  }
+  return { ...cheque, cheque_status: status };
+}
+
 // After any disposal action, the cheque's status reflects the CURRENT action if it fully closes
 // out the remaining balance (DEPOSITED for a deposit, ENDORSED for a vendor/expense payment), or
 // PARTIALLY_ENDORSED if balance is still left — regardless of what mix of disposition types came
@@ -130,15 +154,17 @@ async function recreditIfBounced(transaction, cheque, date) {
     // row's own narration instead of re-deriving a plain "Cheque …" receipt line from the source doc.
     const narration = `Bounce reversal undone (re-credit) — ${chequeRef(cheque.cheque_no, cheque.cheque_date)}`;
     rows = [
-      { entry_date: date, ...debitSide, debit: receipt.amount, credit: 0, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration },
-      { entry_date: date, ba_id: receipt.ba_id, debit: 0, credit: receipt.amount, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration },
+      // is_internal (migration 045): kept on the customer's and CHEQUES IN HAND's ledgers, skipped by
+      // the Cash Book — the day's movement is the deposit/endorsement that follows, not this.
+      { entry_date: date, ...debitSide, debit: receipt.amount, credit: 0, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration, is_internal: true },
+      { entry_date: date, ba_id: receipt.ba_id, debit: 0, credit: receipt.amount, source_type: 'RECEIPT', source_id: receipt.receipt_id, narration, is_internal: true },
     ];
     if (receipt.commission > 0) {
       const commissionAccount = await chartAccountsRepository.findByCode(CODES.COMMISSION_ALLOWED);
       if (!commissionAccount) throw new Error(`Reserved chart account COMMISSION ALLOWED (code ${CODES.COMMISSION_ALLOWED}) not found — run npm run seed`);
       rows.push(
-        { entry_date: date, ac_id: commissionAccount.ac_id, debit: receipt.commission, credit: 0, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission` },
-        { entry_date: date, ba_id: receipt.ba_id, debit: 0, credit: receipt.commission, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission` },
+        { entry_date: date, ac_id: commissionAccount.ac_id, debit: receipt.commission, credit: 0, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission`, is_internal: true },
+        { entry_date: date, ba_id: receipt.ba_id, debit: 0, credit: receipt.commission, source_type: 'COMMISSION', source_id: receipt.receipt_id, narration: `${narration} commission`, is_internal: true },
       );
     }
   }
@@ -183,7 +209,8 @@ async function deposit(chequeId, payload, userId, session) {
   assertNotBefore(payload.allocation_date, cheque.bounced_date, 'bounce date');
 
   await withTransaction(async (transaction) => {
-    await recreditIfBounced(transaction, cheque, payload.allocation_date);
+    const current = await lockForDisposal(transaction, cheque, amount);
+    await recreditIfBounced(transaction, current, payload.allocation_date);
     // After the re-credit's own reads: a lost re-use race against a Return lands here and stops.
     await lockStatus(transaction, cheque.cheque_id, OPEN_STATUSES);
     const allocationId = await repository.insertAllocation(transaction, {
@@ -227,7 +254,8 @@ async function endorseToVendor(chequeId, payload, userId, session) {
   assertNotBefore(payload.allocation_date, cheque.bounced_date, 'bounce date');
 
   await withTransaction(async (transaction) => {
-    await recreditIfBounced(transaction, cheque, payload.allocation_date);
+    const current = await lockForDisposal(transaction, cheque, amount);
+    await recreditIfBounced(transaction, current, payload.allocation_date);
     // After the re-credit's own reads: a lost re-use race against a Return lands here and stops.
     await lockStatus(transaction, cheque.cheque_id, OPEN_STATUSES);
     const allocationId = await repository.insertAllocation(transaction, {
@@ -268,7 +296,8 @@ async function endorseToExpense(chequeId, payload, userId, session) {
   assertNotBefore(payload.allocation_date, cheque.bounced_date, 'bounce date');
 
   await withTransaction(async (transaction) => {
-    await recreditIfBounced(transaction, cheque, payload.allocation_date);
+    const current = await lockForDisposal(transaction, cheque, amount, payload.expense_id ?? null);
+    await recreditIfBounced(transaction, current, payload.allocation_date);
     // After the re-credit's own reads: a lost re-use race against a Return lands here and stops.
     await lockStatus(transaction, cheque.cheque_id, OPEN_STATUSES);
     const allocationId = await repository.insertAllocation(transaction, {
@@ -332,8 +361,7 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
   // Already BOUNCED (and not re-used since) = every allocation and the receipt are ALREADY reversed.
   // Bouncing it again is meaningless; returning it to the sender only needs the status flip, with
   // no second set of reversal rows.
-  const alreadyReversed = cheque.cheque_status === 'BOUNCED';
-  if (alreadyReversed && mode === 'BOUNCED') {
+  if (cheque.cheque_status === 'BOUNCED' && mode === 'BOUNCED') {
     throw ApiError.conflict('This cheque is already bounced', 'CHEQUE_ALREADY_BOUNCED');
   }
 
@@ -343,6 +371,17 @@ async function reverseCheque(chequeId, { date, reason, mode }, userId) {
   const chequesInHand = await businessAccountsService.getChequesInHandAccount();
 
   await withTransaction(async (transaction) => {
+    // The checks above ran on a pool read, so a double click on Return/Bounce passed them twice and
+    // reversed the receipt twice — the customer's due restored two times over. Re-read under the
+    // cheque's lock: the second caller sees what the first committed and stops here.
+    const { cheque_status: status } = await repository.lockCheque(transaction, chequeId);
+    if (TERMINAL_STATUSES.includes(status)) {
+      throw ApiError.conflict(`This cheque is already ${String(status).toLowerCase()}`, 'CHEQUE_TERMINAL');
+    }
+    const alreadyReversed = status === 'BOUNCED';
+    if (alreadyReversed && mode === 'BOUNCED') {
+      throw ApiError.conflict('This cheque is already bounced', 'CHEQUE_ALREADY_BOUNCED');
+    }
     await lockStatus(transaction, chequeId, [cheque.cheque_status]);
     const reversedAllocations = alreadyReversed ? [] : await repository.reverseAllocations(transaction, cheque.receipt_id);
 
@@ -510,6 +549,12 @@ async function undoAllocation(allocation, { date, remarks, bounced }) {
   const narration = `${prefix}${remarks ? ` — ${remarks}` : ''}`.slice(0, 500);
 
   await withTransaction(async (transaction) => {
+    // Same lock as every other action on this cheque, so the status set below is computed from
+    // allocations no concurrent endorse/deposit can be changing underneath it.
+    const { cheque_status: status } = await repository.lockCheque(transaction, allocation.cheque_id);
+    if (TERMINAL_STATUSES.includes(status)) {
+      throw ApiError.conflict(`This cheque is already ${String(status).toLowerCase()}`, 'CHEQUE_TERMINAL');
+    }
     if (!(await repository.reverseOneAllocation(transaction, allocation.allocation_id))) {
       throw ApiError.conflict('This allocation has already been reversed', 'ALLOCATION_ALREADY_REVERSED');
     }

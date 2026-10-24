@@ -248,7 +248,7 @@ async function postWithinTransaction(transaction, receiptId, receipt) {
     );
   }
   await repository.insertLedgerEntries(transaction, rows);
-  await repository.setStatus(transaction, receiptId, 'CONFIRMED');
+  if (!(await repository.setStatus(transaction, receiptId, 'CONFIRMED'))) throw ApiError.conflict('Receipt is already posted', 'ALREADY_POSTED');
 }
 
 // Post: Dr <cash/bank/cheques-in-hand> / Cr the receipt's business account for `amount`, plus a
@@ -295,8 +295,16 @@ async function unpost(receiptId, session) {
   await assertChequeUntouched(receipt);
 
   await withTransaction(async (transaction) => {
+    // Under the cheque's own lock (cheques.repository.js#lockCheque), so a deposit/endorsement that
+    // committed after the check above is seen here instead of being stranded on an unposted receipt.
+    if (receipt.payment_mode === 'CHEQUE' && receipt.cheque_id) {
+      const { cheque_status: chequeStatus } = await chequesRepository.lockCheque(transaction, receipt.cheque_id);
+      if (chequeStatus !== 'PENDING') {
+        throw ApiError.conflict('This cheque has already been disposed of — reverse that first', 'CHEQUE_IN_USE');
+      }
+    }
     await repository.deleteLedgerEntries(transaction, receiptId);
-    await repository.setStatus(transaction, receiptId, 'DRAFT');
+    if (!(await repository.setStatus(transaction, receiptId, 'DRAFT'))) throw ApiError.conflict('Receipt is not posted', 'NOT_POSTED');
   });
 
   return getById(receiptId);
@@ -326,6 +334,14 @@ async function unconfirm(receiptId, session) {
   await assertChequeUntouched(receipt);
 
   const draftId = await withTransaction(async (transaction) => {
+    // Under the cheque's own lock (cheques.repository.js#lockCheque), so a deposit/endorsement that
+    // committed after the check above is seen here instead of being stranded on an unposted receipt.
+    if (receipt.payment_mode === 'CHEQUE' && receipt.cheque_id) {
+      const { cheque_status: chequeStatus } = await chequesRepository.lockCheque(transaction, receipt.cheque_id);
+      if (chequeStatus !== 'PENDING') {
+        throw ApiError.conflict('This cheque has already been disposed of — reverse that first', 'CHEQUE_IN_USE');
+      }
+    }
     await repository.deleteLedgerEntries(transaction, receiptId);
 
     const newDraftId = await draftReceiptsRepository.insert(transaction, {
@@ -360,7 +376,7 @@ async function unconfirm(receiptId, session) {
       await chequesRepository.deleteCheque(transaction, receipt.cheque_id);
     }
 
-    await repository.remove(transaction, receiptId);
+    if (!(await repository.remove(transaction, receiptId))) throw ApiError.conflict('Receipt is not posted', 'NOT_POSTED');
     return newDraftId;
   });
 

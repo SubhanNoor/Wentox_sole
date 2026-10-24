@@ -103,7 +103,7 @@ async function post(transferId, userId, session) {
       toBaId: transfer.to_ba_id,
       amount: transfer.amount,
     });
-    await repository.setStatus(transaction, transferId, 'CONFIRMED', userId);
+    if (!(await repository.setStatus(transaction, transferId, 'CONFIRMED', userId))) throw ApiError.conflict('Transfer is already posted', 'ALREADY_POSTED');
   });
 
   return getById(transferId);
@@ -119,7 +119,7 @@ async function unpost(transferId, userId, session) {
 
   await withTransaction(async (transaction) => {
     await repository.deleteLedgerEntries(transaction, transferId);
-    await repository.setStatus(transaction, transferId, 'DRAFT', userId);
+    if (!(await repository.setStatus(transaction, transferId, 'DRAFT', userId))) throw ApiError.conflict('Transfer is not posted', 'NOT_POSTED');
   });
 
   return getById(transferId);

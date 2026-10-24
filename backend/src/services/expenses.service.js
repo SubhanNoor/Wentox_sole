@@ -226,7 +226,9 @@ async function post(expenseId, userId, session) {
         expense_id: expenseId,
       }, userId);
     }
-    await withTransaction((transaction) => repository.setStatus(transaction, expenseId, 'CONFIRMED', userId));
+    await withTransaction(async (transaction) => {
+      if (!(await repository.setStatus(transaction, expenseId, 'CONFIRMED', userId))) throw ApiError.conflict('Expense is already posted', 'ALREADY_POSTED');
+    });
     return getById(expenseId);
   }
 
@@ -238,7 +240,7 @@ async function post(expenseId, userId, session) {
       { entry_date: expense.expense_date, ba_id: expense.ba_id, debit: expense.amount, credit: 0, source_type: 'EXPENSE', source_id: expenseId, narration },
       { entry_date: expense.expense_date, ...creditSide, debit: 0, credit: expense.amount, source_type: 'EXPENSE', source_id: expenseId, narration },
     ]);
-    await repository.setStatus(transaction, expenseId, 'CONFIRMED', userId);
+    if (!(await repository.setStatus(transaction, expenseId, 'CONFIRMED', userId))) throw ApiError.conflict('Expense is already posted', 'ALREADY_POSTED');
   });
 
   return getById(expenseId);
@@ -318,7 +320,7 @@ async function unpost(expenseId, session, { reverseEndorsement = false } = {}, u
 
   await withTransaction(async (transaction) => {
     await repository.deleteLedgerEntries(transaction, expenseId);
-    await repository.setStatus(transaction, expenseId, 'DRAFT');
+    if (!(await repository.setStatus(transaction, expenseId, 'DRAFT'))) throw ApiError.conflict('Expense is not posted', 'NOT_POSTED');
   });
 
   return getById(expenseId);
@@ -382,7 +384,7 @@ async function unconfirm(expenseId, session, { reverseEndorsement = false } = {}
       created_at: expense.created_at,
     });
 
-    await repository.remove(transaction, expenseId);
+    if (!(await repository.remove(transaction, expenseId))) throw ApiError.conflict('Expense is not posted', 'NOT_POSTED');
     return newDraftId;
   });
 
@@ -414,15 +416,18 @@ async function reverseIssuedCheque(expenseId, { date, reason, mode }, userId) {
   const narration = `${mode} reversal of expense #${expenseId}`;
 
   await withTransaction(async (transaction) => {
+    // Status first, conditionally: whichever of two simultaneous calls flips PENDING posts the
+    // reversal; the other stops before writing anything.
+    const flipped = mode === 'BOUNCED'
+      ? await repository.markIssuedChequeBounced(transaction, expenseId, date)
+      : await repository.markIssuedChequeReturned(transaction, expenseId, date, reason);
+    if (!flipped) {
+      throw ApiError.conflict('This cheque has already been bounced or returned', 'ISSUED_CHEQUE_TERMINAL');
+    }
     await repository.insertLedgerEntries(transaction, [
       { entry_date: date, ba_id: bank.ba_id, debit: expense.amount, credit: 0, source_type: 'EXPENSE', source_id: expenseId, narration },
       { entry_date: date, ba_id: expense.ba_id, debit: 0, credit: expense.amount, source_type: 'EXPENSE', source_id: expenseId, narration },
     ]);
-    if (mode === 'BOUNCED') {
-      await repository.markIssuedChequeBounced(transaction, expenseId, date);
-    } else {
-      await repository.markIssuedChequeReturned(transaction, expenseId, date, reason);
-    }
   });
 
   return getById(expenseId);

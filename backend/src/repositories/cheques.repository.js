@@ -1,6 +1,6 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
-const { sql, query, requestWithParams } = require('../db/pool');
+const { sql, query, requestWithParams, acquireAppLock } = require('../db/pool');
 
 // Takes the caller's transaction — always called right after receipts.repository.js#insert() in
 // the same withTransaction block (receipts.service.js:create()), then linked back via
@@ -148,6 +148,34 @@ async function lockIfStatusIn(transaction, chequeId, statuses) {
      WHERE cheque_id = @chequeId AND cheque_status IN (${statuses.map((_, i) => `@status${i}`).join(', ')})`,
   );
   return result.rowsAffected[0] > 0;
+}
+
+// Serializes every money action on ONE cheque (deposit, endorse, bounce, return, undo) and returns
+// its status as of now. The services check status and remaining balance on a pool read BEFORE their
+// transaction opens, so two clicks both passed those checks and both posted — a double endorsement,
+// or a receipt reversed twice. Under this lock the second caller waits for the first to commit, then
+// re-checks against the committed state. Released automatically at commit/rollback. Also taken by
+// receipts.service.js#unpost/#unconfirm, so a receipt cannot be unposted under a cheque being used.
+// Returns { cheque_status, receipt_status } — both as committed, read inside the lock.
+async function lockCheque(transaction, chequeId) {
+  await acquireAppLock(transaction, `cheque:${chequeId}`);
+  const request = requestWithParams(transaction, { chequeId: { type: sql.Int, value: chequeId } });
+  const result = await request.query(
+    `SELECT ch.cheque_status, r.status AS receipt_status
+     FROM dbo.cheques ch JOIN dbo.receipts r ON r.receipt_id = ch.receipt_id
+     WHERE ch.cheque_id = @chequeId`,
+  );
+  return result.recordset[0] || { cheque_status: null, receipt_status: null };
+}
+
+// An ACTIVE allocation already tied to this expense, read inside the caller's transaction (under
+// lockCheque) — what stops two simultaneous posts of one CHEQUE_ENDORSED expense from both endorsing.
+async function hasActiveAllocationForExpenseInTransaction(transaction, expenseId) {
+  const request = requestWithParams(transaction, { expenseId: { type: sql.Int, value: expenseId } });
+  const result = await request.query(
+    `SELECT TOP 1 1 AS found FROM dbo.cheque_allocations WHERE expense_id = @expenseId AND status = 'ACTIVE'`,
+  );
+  return result.recordset.length > 0;
 }
 
 async function markBounced(transaction, chequeId, bouncedDate) {
@@ -401,9 +429,12 @@ async function reverseAllocations(transaction, receiptId) {
 
   for (const row of active.recordset) {
     const request = requestWithParams(transaction, { allocationId: { type: sql.Int, value: row.allocation_id } });
-    await request.query(
-      `UPDATE dbo.cheque_allocations SET status = 'REVERSED' WHERE allocation_id = @allocationId`,
+    const updated = await request.query(
+      `UPDATE dbo.cheque_allocations SET status = 'REVERSED' WHERE allocation_id = @allocationId AND status = 'ACTIVE'`,
     );
+    // The caller holds lockCheque(), so nothing else can have flipped it — but if it ever has, a
+    // second reversal pair must not be posted for it, so fail the whole transaction loudly.
+    if (!updated.rowsAffected[0]) throw new Error(`Allocation ${row.allocation_id} was reversed concurrently`);
   }
   return active.recordset;
 }
@@ -421,17 +452,19 @@ async function insertLedgerEntries(transaction, rows) {
       sourceType: { type: sql.VarChar(20), value: row.source_type },
       sourceId: { type: sql.Int, value: row.source_id },
       narration: { type: sql.NVarChar(500), value: row.narration ?? null },
+      // Migration 045 — set only by recreditIfBounced(); see the column's own migration for why.
+      isInternal: { type: sql.Bit, value: row.is_internal ? 1 : 0 },
     });
     await request.query(`
-      INSERT INTO dbo.ledger_entries (entry_date, ac_id, ba_id, debit, credit, source_type, source_id, narration)
-      VALUES (@entryDate, @acId, @baId, @debit, @credit, @sourceType, @sourceId, @narration)
+      INSERT INTO dbo.ledger_entries (entry_date, ac_id, ba_id, debit, credit, source_type, source_id, narration, is_internal)
+      VALUES (@entryDate, @acId, @baId, @debit, @credit, @sourceType, @sourceId, @narration, @isInternal)
     `);
   }
 }
 
 module.exports = {
   insert, updateDetails, deleteCheque, findById, findByReceiptId, list, setBank, setStatus,
-  markBounced, claimBouncedForReuse, lockIfStatusIn, setBouncedDate, findLatestActiveAllocation, markReturned, insertAllocation, findAllocationByExpenseId, listAllocations,
+  lockCheque, hasActiveAllocationForExpenseInTransaction, markBounced, claimBouncedForReuse, lockIfStatusIn, setBouncedDate, findLatestActiveAllocation, markReturned, insertAllocation, findAllocationByExpenseId, listAllocations,
   detachAllocationFromExpense, findAnyAllocationByExpenseId,
   findAllocationById, listEndorsedAllocations, sumActiveAllocations,
   sumActiveAllocationsInTransaction, reverseAllocations, reverseOneAllocation, insertLedgerEntries,

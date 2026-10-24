@@ -152,15 +152,22 @@ async function setStatus(transaction, receiptId, status, userId) {
     status: { type: sql.VarChar(10), value: status },
     updatedBy: { type: sql.Int, value: userId ?? null },
   });
-  await request.query(
-    'UPDATE dbo.receipts SET status = @status, updated_by = @updatedBy WHERE receipt_id = @receiptId',
+  // Conditional, like settlements.repository.js#setStatus: the row count tells the caller whether
+  // THIS call made the change. A double-clicked post/unpost passes the service's status check twice
+  // (it reads before the transaction), so the second one is stopped here and rolls back its rows.
+  const result = await request.query(
+    'UPDATE dbo.receipts SET status = @status, updated_by = @updatedBy WHERE receipt_id = @receiptId AND status <> @status',
   );
+  return result.rowsAffected[0];
 }
 
 // DRAFT-only, enforced by the service — receipts is a transaction table, never soft-deleted.
 async function remove(transaction, receiptId) {
   const request = requestWithParams(transaction, { receiptId: { type: sql.Int, value: receiptId } });
-  await request.query('DELETE FROM dbo.receipts WHERE receipt_id = @receiptId');
+  // Row count returned so unconfirm() can tell a second, concurrent unconfirm (row already gone)
+  // from the real one — otherwise both would leave a draft behind and the document came back twice.
+  const result = await request.query('DELETE FROM dbo.receipts WHERE receipt_id = @receiptId');
+  return result.rowsAffected[0];
 }
 
 // One pair per plain receipt (Dr <cash/bank/cheques-in-hand> / Cr customer BA); a second pair when

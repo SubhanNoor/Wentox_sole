@@ -98,9 +98,13 @@ async function setStatus(transaction, transferId, status, updatedBy) {
     status: { type: sql.VarChar(10), value: status },
     updatedBy: { type: sql.Int, value: updatedBy ?? null },
   });
-  await request.query(
-    'UPDATE dbo.transfers SET status = @status, updated_by = @updatedBy WHERE transfer_id = @transferId',
+  // Conditional, like settlements.repository.js#setStatus: the row count tells the caller whether
+  // THIS call made the change. A double-clicked post/unpost passes the service's status check twice
+  // (it reads before the transaction), so the second one is stopped here and rolls back its rows.
+  const result = await request.query(
+    'UPDATE dbo.transfers SET status = @status, updated_by = @updatedBy WHERE transfer_id = @transferId AND status <> @status',
   );
+  return result.rowsAffected[0];
 }
 
 // One ledger pair per transfer: Dr destination / Cr source (cash_and_bank.md §7).
