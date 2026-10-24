@@ -9001,3 +9001,9 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
 - **Files:** `src/db/migrations/045_ledger_entries_is_internal.sql`, `src/repositories/{cheques,reports,receipts,expenses,transfers,deposits,journalVouchers}.repository.js`, `src/services/{cheques,receipts,expenses,transfers,deposits,journalVouchers}.service.js`, `test/cheques.noDoubleEntries.test.js`, `scripts/audit-double-entries.sql`.
 - **Verified:** the new suite passes 10/10, and 6 of those fail on the old code. Full backend suite 49/49 on `wentox_test`.
 - **Not covered:** sale bills, purchases and their returns, wage and salary runs, and stock vouchers have the same check-before-transaction shape. They were not changed in this pass.
+
+### 2026-10-24 — Cash Book order: oldest entered first (FIFO)
+- **What:** the Cash Book listed the most recently entered entry first (LIFO, per the user 2026-09-01). The user asked for FIFO.
+- **How:** in `reports.service.js#cashBook`, entries are now sorted by `created_at` ascending. Bank Transfers and Cheques Deposited are no longer reversed, so they read oldest first like the grid. `created_at` is whole seconds, so entries saved in the same second now break the tie by ledger `entry_id`. Before, they fell back to the query's type order, which put endorsements before receipts. Unposted drafts fall back to date, then build order.
+- **Files:** `src/services/reports.service.js`, `test/cashBook.order.test.js`.
+- **Verified:** the new test fails on the old code and passes now. Full backend suite 55/55.

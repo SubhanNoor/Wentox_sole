@@ -879,8 +879,9 @@ async function cashBook(filters = {}) {
       txn_seq: r.__txnSeq,
       is_first_of_txn: isFirstOfTxn,
       is_posted: true,
-      // Internal only — the single key the whole report is ordered by, see the sort below.
+      // Internal only — the keys the whole report is ordered by, see the sort below.
       __enteredAt: r.created_at ? new Date(r.created_at).getTime() : 0,
+      __entryId: Number(r.entry_id),
     };
   });
 
@@ -967,9 +968,9 @@ async function cashBook(filters = {}) {
     }
   }
 
-  // NEWEST ENTERED FIRST, on ONE timeline — posted and unposted ranked together, whichever was
-  // recorded last sitting at the top (per the user, 2026-09-01: "no matter if its posted or
-  // unposted the sorting order should be last in first shown").
+  // OLDEST ENTERED FIRST (FIFO), on ONE timeline — posted and unposted ranked together, whichever
+  // was recorded first sitting at the top. Was newest-first (per the user, 2026-09-01: "last in
+  // first shown"); changed to first-in-first-shown per the user, 2026-10-24.
   //
   // Ordered by created_at — when the row was actually WRITTEN — not by the document's own date.
   // Those differ whenever anything is backdated, and it is the moment of entry the user is
@@ -977,7 +978,7 @@ async function cashBook(filters = {}) {
   // that happened to carry a later date; grouping posted before unposted (the previous shape) also
   // pushed a brand-new receipt down the page, which is what put one at S#9.
   //
-  // Reversed by ENTRY, not by row: sorting the flat list would put every TO line above its own
+  // Sorted by ENTRY, not by row: sorting the flat list would put every TO line above its own
   // FROM line and break the pair the layout is built around. Rows are gathered back into their
   // entries, the entries are ranked, and each pair is re-emitted FROM-then-TO.
   const byEntry = new Map();
@@ -985,20 +986,27 @@ async function cashBook(filters = {}) {
     if (!byEntry.has(r.txn_seq)) byEntry.set(r.txn_seq, []);
     byEntry.get(r.txn_seq).push(r);
   }
+  // created_at is DATETIME2(0) — whole seconds — so a bulk post, or two quick entries, tie on it.
+  // Two posted entries then go by ledger entry_id, which only ever increases and so IS the order
+  // they were written in. Unposted drafts have no entry_id; they fall back to the document date,
+  // then to the build order, so ties stay deterministic rather than shuffling between reloads.
+  const firstEntryId = (entry) => Math.min(...entry.map((r) => r.__entryId ?? Infinity));
   const entries = [...byEntry.values()].sort((a, b) => {
-    const diff = (b[0].__enteredAt || 0) - (a[0].__enteredAt || 0);
+    const diff = (a[0].__enteredAt || 0) - (b[0].__enteredAt || 0);
     if (diff !== 0) return diff;
-    // Same instant (a bulk post writes its rows in one go), or no timestamp at all on some older
-    // row — fall back to the document date, then to the build order, so ties stay deterministic
-    // rather than shuffling between reloads.
-    return new Date(b[0].date).getTime() - new Date(a[0].date).getTime();
+    const idA = firstEntryId(a);
+    const idB = firstEntryId(b);
+    if (Number.isFinite(idA) && Number.isFinite(idB) && idA !== idB) return idA - idB;
+    const byDate = new Date(a[0].date).getTime() - new Date(b[0].date).getTime();
+    if (byDate !== 0) return byDate;
+    return a[0].txn_seq - b[0].txn_seq;
   });
 
   // Renumbered 1..N down the page. S# is a reading position on this report, not an identity — it
   // would otherwise count down from N and look like the list had been truncated.
   rows = entries.flatMap((entry, i) => entry.map((r, j) => {
-    const { __enteredAt, ...rest } = r; // internal ordering key, not part of the API shape
-    void __enteredAt;
+    const { __enteredAt, __entryId, ...rest } = r; // internal ordering keys, not part of the API shape
+    void __enteredAt; void __entryId;
     return { ...rest, txn_seq: i + 1, is_first_of_txn: j === 0 };
   }));
 
@@ -1028,9 +1036,8 @@ async function cashBook(filters = {}) {
     amount: Number(r.amount),
     remarks: r.remarks || '',
   }));
-  // Newest first as well, to match the grid above — a report that reads one way in its main table
-  // and the other way in the panels beneath it is just confusing.
-  bankTransfers.reverse();
+  // Oldest first as the repository returns them (date, then id), to match the grid above — a report
+  // that reads one way in its main table and the other way in the panels beneath it is confusing.
   const chequeDeposits = chequeDepositsRaw.map((r) => ({
     date: toISODate(r.entry_date),
     cheque_no: r.cheque_no || null,
@@ -1038,8 +1045,6 @@ async function cashBook(filters = {}) {
     bank_name: r.bank_name || null,
     amount: Number(r.amount),
   }));
-
-  chequeDeposits.reverse();
 
   return {
     opening_cash: opening,
