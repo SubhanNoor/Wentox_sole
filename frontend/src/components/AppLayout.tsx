@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
+import BooksCheckNotice from '@/components/BooksCheckNotice';
 import ZoomControl from '@/components/ZoomControl';
 import OpenWindowsMenu from '@/components/OpenWindowsMenu';
 import MenuBar from '@/components/MenuBar';
@@ -508,6 +509,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
           <div className="flex items-center gap-3 flex-shrink-0 ml-auto">
             <ZoomControl />
             <OpenWindowsMenu />
+            {state.currentUserRole !== 'User' && <BooksCheckNotice />}
             <NotificationBell />
 
           {/* The user chip — and with it Settings and Log out — used to sit in the sidebar footer.

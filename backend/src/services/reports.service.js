@@ -220,6 +220,19 @@ function namedOnlineCounterparty(base, {
   return `${base} — ${viewingSource ? 'to' : 'from'} ${otherName}`;
 }
 
+// A bounce, a return and the re-credit that undoes a bounce all reuse the source document's own
+// source_type (reverse-never-erase), so on a ledger they used to read as one more "Receipt (Jamma)"
+// — Dasti Lain Dain's ledger showed the 18/10 bounce and the 23/10 re-credit as plain receipts
+// (reported 2026-10-25). Their own narration says which they are; this names them for the Type
+// column. Null for anything else, so the caller keeps its usual label.
+function reversalLabel(narration) {
+  if (!narration) return null;
+  if (/^Bounce reversal undone/i.test(narration)) return 'Bounce Undone';
+  if (/^BOUNCED reversal/i.test(narration)) return 'Cheque Bounced';
+  if (/^RETURNED reversal/i.test(narration)) return 'Cheque Returned';
+  return null;
+}
+
 function formatLedgerRow(r, viewedBaId) {
   let type = r.source_type;
   let inv_no = null;
@@ -237,7 +250,7 @@ function formatLedgerRow(r, viewedBaId) {
       type = 'Sale Return'; inv_no = r.sr_system_no ?? r.sr_inv_no; bill_no = r.sr_bill_no; narration = narration || 'SAME';
       break;
     case 'RECEIPT': {
-      type = 'Receipt (Jamma)'; inv_no = r.rc_voucher_no ?? null;
+      type = reversalLabel(r.narration) || 'Receipt (Jamma)'; inv_no = r.rc_voucher_no ?? null;
       // A bounce/return reversal reuses source_type='RECEIPT' on purpose (reverse-never-erase,
       // §6.1) with its OWN narration ("BOUNCED reversal of receipt #X") — that must win over the
       // receipt's own remarks, or the reversal row would misleadingly look like a normal receipt.
@@ -325,7 +338,7 @@ function formatLedgerRow(r, viewedBaId) {
       // same "reversal" narration sniff distinguishes them instead of showing one generic label
       // for both directions of money movement.
       const isReversal = r.narration && /reversal/i.test(r.narration);
-      type = isReversal ? 'Cheque Return' : 'Cheque Endorsement';
+      type = isReversal ? (reversalLabel(r.narration) || 'Cheque Return') : 'Cheque Endorsement';
       // The stored text names the bank/vendor and an internal cheque id — replaced by the real
       // cheque number and due date (2026-09-18). A reversal keeps its own explanatory text.
       if (!isReversal) narration = paymentNarration('Cheque', r.cal_cheque_no, r.cal_cheque_date);

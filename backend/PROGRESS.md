@@ -9007,3 +9007,47 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
 - **How:** in `reports.service.js#cashBook`, entries are now sorted by `created_at` ascending. Bank Transfers and Cheques Deposited are no longer reversed, so they read oldest first like the grid. `created_at` is whole seconds, so entries saved in the same second now break the tie by ledger `entry_id`. Before, they fell back to the query's type order, which put endorsements before receipts. Unposted drafts fall back to date, then build order.
 - **Files:** `src/services/reports.service.js`, `test/cashBook.order.test.js`.
 - **Verified:** the new test fails on the old code and passes now. Full backend suite 55/55.
+
+### 2026-10-25 — Ledger names bounce, return and re-credit rows
+- **What was wrong:** on Dasti Lain Dain's ledger, the 18/10 bounce ("BOUNCED reversal of receipt #863") and the 23/10 re-credit ("Bounce reversal undone") showed as plain "Receipt (Jamma)" rows with only the cheque number and date. They looked like duplicate receipts.
+- **How:**
+  - `reports.service.js#reversalLabel` names these rows from their own narration: Cheque Bounced, Cheque Returned or Bounce Undone. It is used for RECEIPT rows and for CHEQUE_ALLOCATION reversals (a bounce from a vendor or bank now reads "Cheque Bounced"; a plain return stays "Cheque Return").
+  - `ReportKhaataPage.tsx` shows those rows' narration above the cheque number instead of replacing it, with their own type colours.
+- **Files:** `src/services/reports.service.js`, `frontend/src/pages/ReportKhaataPage.tsx`.
+- **Verified:** Dasti's real ledger on the client copy (18–23/10) reads Cheque Bounced / Receipt / Bounce Undone correctly. Backend suite 55/55. Frontend type-check is clean for the changed file. The only build errors are the uninstalled `vitest` in local `node_modules`, which predate this change.
+
+### 2026-10-25 — New windows open centred, each on top of the last
+- **What:** a new screen window opened bottom-right, and each further one stepped up-left. The user asked for every new window to open in the centre of the main screen, with the next one at the same spot in front and the earlier ones staying behind.
+- **How:**
+  - `electron/windowManager.js#childPlacement` centres the window across the main window's screen. Top to bottom, it centres it in the space below the Quick Menu bar, so the 2026-10-22 rule that a window never covers the Quick Menu still holds.
+  - The step offset is gone, so every window opens at the same spot.
+  - "Newest in front" was already handled by `showChild()` and the stacking order; unchanged.
+- **Files:** `electron/windowManager.js`, `e2e/childWindows.placement.e2e.js`.
+- **Verified:** `childWindows.placement.e2e.js` and `childWindows.reuse.e2e.js` pass in Electron, 4/4 at 100% and 75% zoom. Two windows land at identical bounds, centred, below the bar, and the newest is in front.
+
+### 2026-10-25 — Safeguards: duplicate cheques, bounced re-entries, cheques back to their giver, Books Check
+- **Why:** honest mistakes left the client's balances wrong with nothing on screen saying so. Dasti Lain Dain (+50,000) and Dilshad Chapal Hyderabad (+100,000) each had one paper cheque on two receipts, and the old bounced record was reused, so each was credited twice. The user: "I don't want anything else to appear like this now and in future."
+- **A1, duplicate cheque number (warning):**
+  - `receipts.service.js#assertNotDuplicateCheque` is called from receipt and draft-receipt create/update.
+  - A cheque number this party already gave, not returned, on a posted receipt or an unposted line, is refused with `DUPLICATE_CHEQUE` unless `allow_duplicate_cheque` is sent.
+  - ReceiptsPage shows a "Cheque already entered" prompt naming the existing receipt, and saves again only on "It's a different cheque — save".
+- **A2, bounced and re-entered (block):** `cheques.service.js#lockForDisposal` refuses to reuse a fully BOUNCED record when the same cheque was entered again on another record (`CHEQUE_REENTERED`, naming it). Reusing a bounced cheque that was never re-entered works as before.
+- **A3, back to the giver (block):** `assertNotBackToGiver` stops endorse-to-vendor or pay-to-expense into the account that gave the cheque (`CHEQUE_BACK_TO_GIVER`) and points to Return to sender.
+- **B, Books Check:** new feature `booksCheck` (`booksCheck.repository/service/ipc`, `books-check:run`, ADMIN), read-only. It checks:
+  - debits = credits
+  - the Cheques in Hand ledger equals the cheques actually held
+  - no cheque entered twice per party
+  - no cheque over-allocated
+  - nothing posted or reversed twice
+
+  `BooksCheckNotice.tsx` runs it when the main window opens and daily. It shows a red header button only when a check fails; the panel lists the exact records and has Run again.
+- **On the client copy:** Books Check flags exactly the two known duplicates (44782060 Dasti, 10948663 Dilshad); every other check passes. The notice will stay red after the update until those are corrected.
+- **Files:**
+  - backend: `src/repositories/receipts.repository.js`, `src/services/{receipts,draftReceipts,cheques}.service.js`, `src/{repositories,services,ipc}/booksCheck.*.js`, `src/ipc/index.js`
+  - frontend: `src/lib/{api,ipcBridge}.ts`, `src/pages/ReceiptsPage.tsx`, `src/components/{BooksCheckNotice,AppLayout}.tsx`
+  - tests: `test/books.safeguards.test.js`, `e2e/books.safeguards.e2e.js`
+- **Verified:**
+  - Backend 59/59. The A1–A3 tests fail without the guards.
+  - The new e2e passes in Electron: the red notice names the duplicate; Receipts stops at the prompt and saves once confirmed.
+  - The Receipts, master/detail and window e2e tests pass (13/13).
+  - tsc clean; ESLint clean for the new and changed files (ReceiptsPage's existing lint errors are unchanged).

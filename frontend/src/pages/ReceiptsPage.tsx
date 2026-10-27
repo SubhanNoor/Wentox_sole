@@ -20,6 +20,7 @@ import MonthlyReceiptsTab from '@/components/MonthlyReceiptsTab';
 import OverallReceiptsTab from '@/components/OverallReceiptsTab';
 import AccountBalanceTooltip from '@/components/AccountBalanceTooltip';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
+import ConfirmModal from '@/components/ConfirmModal';
 import { toDateInputValue, formatDate, asNavEntries, type NavEntry } from '@/lib/utils';
 import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
@@ -341,6 +342,10 @@ export default function ReceiptsPage() {
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
+  // A1 (2026-10-25): the backend refused a line because this party has already given this cheque
+  // number. Holds its message and the save to repeat if the operator says it is a different cheque.
+  const [duplicateCheque, setDuplicateCheque] = useState<{ message: string; confirm: () => Promise<void> } | null>(null);
+  const [duplicateChequeBusy, setDuplicateChequeBusy] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
 
 
@@ -839,10 +844,29 @@ export default function ReceiptsPage() {
     // A voucher line is saved UNPOSTED, so it goes into dbo.draft_receipts — the real receipts
     // table only ever holds posted documents now. Posting the voucher is what moves each line
     // across (draftReceipts.confirm), and unposting moves it back.
-    const result = mode === 'edit' && receiptId != null && entryIsDraft
-      ? await api.draftReceipts.update(receiptId, linePayload)
-      : await api.draftReceipts.create(linePayload);
+    const saveLine = (allowDuplicateCheque = false) => {
+      const body = allowDuplicateCheque ? { ...linePayload, allow_duplicate_cheque: true } : linePayload;
+      return mode === 'edit' && receiptId != null && entryIsDraft
+        ? api.draftReceipts.update(receiptId, body)
+        : api.draftReceipts.create(body);
+    };
+    const firstTry = await saveLine();
+    // Same party, same cheque number already on the books: ask before saving it a second time —
+    // one paper cheque entered twice credits the customer twice.
+    if (!firstTry.ok && firstTry.error.code === 'DUPLICATE_CHEQUE') {
+      const voucherForLine = openVoucher;
+      setDuplicateCheque({
+        message: firstTry.error.message,
+        confirm: async () => finishLine(await saveLine(true), voucherForLine),
+      });
+      return;
+    }
+    await finishLine(firstTry, openVoucher);
+  };
 
+  // Everything after a line's save call — shared by a normal Done and a Done repeated from the
+  // duplicate-cheque prompt.
+  const finishLine = async (result: Awaited<ReturnType<typeof api.draftReceipts.create>>, openVoucher: ReceiptVoucherRow) => {
     if (!result.ok) { fail('Failed to save entry: ' + result.error.message); return; }
 
     // Nothing to clean up: an unposted receipt IS a draft now, so loading one into the entry row
@@ -2465,6 +2489,21 @@ export default function ReceiptsPage() {
         )}
 
       </div>
+
+      <ConfirmModal
+        isOpen={duplicateCheque != null}
+        title="Cheque already entered"
+        body={<>{duplicateCheque?.message}<br /><br /><b>Save it anyway only if this is a different cheque.</b> The same cheque entered twice credits the customer twice.</>}
+        confirmLabel="It's a different cheque — save"
+        cancelLabel="Cancel"
+        busy={duplicateChequeBusy}
+        onCancel={() => setDuplicateCheque(null)}
+        onConfirm={async () => {
+          if (!duplicateCheque) return;
+          setDuplicateChequeBusy(true);
+          try { await duplicateCheque.confirm(); } finally { setDuplicateChequeBusy(false); setDuplicateCheque(null); }
+        }}
+      />
 
       <PasswordPromptModal
         isOpen={deleteTarget != null}

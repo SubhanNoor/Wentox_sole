@@ -192,6 +192,42 @@ async function insertLedgerEntries(transaction, rows) {
   }
 }
 
+// The same paper cheque already on the books: same party, same cheque number (spaces ignored), on a
+// receipt — posted or not — or on an unposted voucher line. A RETURNED cheque is excluded: it went
+// back to the party, so receiving it again is legitimate. One row (posted first), or null.
+//
+// Why it exists: a bounced cheque re-entered as a NEW receipt and then the old bounced record used
+// as well credited the customer twice — Dasti Lain Dain +50,000 and Dilshad Chapal +100,000 in the
+// client's data (found 2026-10-25). See receipts.service.js#assertNotDuplicateCheque and
+// cheques.service.js#lockForDisposal.
+async function findSameCheque({ baId, chequeNo, excludeReceiptId = null, excludeDraftId = null }) {
+  const result = await query(
+    `SELECT TOP 1 * FROM (
+       SELECT 'POSTED' AS kind, r.receipt_id AS doc_id, rv.voucher_no, r.receipt_date AS doc_date
+       FROM dbo.receipts r
+       JOIN dbo.cheques ch ON ch.cheque_id = r.cheque_id
+       LEFT JOIN dbo.receipt_vouchers rv ON rv.voucher_id = r.voucher_id
+       WHERE r.ba_id = @baId AND LTRIM(RTRIM(ch.cheque_no)) = @chequeNo
+         AND ch.cheque_status <> 'RETURNED'
+         AND (@excludeReceiptId IS NULL OR r.receipt_id <> @excludeReceiptId)
+       UNION ALL
+       SELECT 'UNPOSTED', d.draft_id, rv.voucher_no, d.receipt_date
+       FROM dbo.draft_receipts d
+       LEFT JOIN dbo.receipt_vouchers rv ON rv.voucher_id = d.voucher_id
+       WHERE d.ba_id = @baId AND d.payment_mode = 'CHEQUE' AND LTRIM(RTRIM(d.cheque_no)) = @chequeNo
+         AND (@excludeDraftId IS NULL OR d.draft_id <> @excludeDraftId)
+     ) q
+     ORDER BY CASE kind WHEN 'POSTED' THEN 0 ELSE 1 END, doc_id`,
+    {
+      baId: { type: sql.Int, value: baId },
+      chequeNo: { type: sql.VarChar(50), value: String(chequeNo).trim() },
+      excludeReceiptId: { type: sql.Int, value: excludeReceiptId },
+      excludeDraftId: { type: sql.Int, value: excludeDraftId },
+    },
+  );
+  return result.recordset[0] || null;
+}
+
 async function deleteLedgerEntries(transaction, receiptId) {
   const request = requestWithParams(transaction, { receiptId: { type: sql.Int, value: receiptId } });
   await request.query(
@@ -201,5 +237,5 @@ async function deleteLedgerEntries(transaction, receiptId) {
 
 module.exports = {
   insert, linkCheque, unlinkCheque, findById, list, updateHeader, setStatus, remove,
-  insertLedgerEntries, deleteLedgerEntries,
+  insertLedgerEntries, deleteLedgerEntries, findSameCheque,
 };

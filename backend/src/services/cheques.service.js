@@ -83,7 +83,34 @@ async function lockForDisposal(transaction, cheque, amount, expenseId = null) {
   if (amount > cheque.receipt_amount - allocated) {
     throw ApiError.conflict('This cheque no longer has that much balance left — it was used in the meantime', 'CHEQUE_FULLY_ALLOCATED');
   }
+  // A2 (2026-10-25): a cheque that bounced back to its party and was then entered AGAIN as a new
+  // receipt now has two records for one piece of paper. Using the old bounced one as well would
+  // re-credit the party on top of the new receipt's credit — exactly how Dasti and Dilshad were
+  // credited twice. Only the re-use of a fully bounced record is refused; re-using a bounced cheque
+  // that was never re-entered works as before.
+  if (status === 'BOUNCED') {
+    const reentry = await receiptsService.findChequeReentry(cheque);
+    if (reentry) {
+      throw ApiError.conflict(
+        `Cheque ${cheque.cheque_no} was already entered again as ${receiptsService.describeSameCheque(reentry)} — use that one, not this bounced record.`,
+        'CHEQUE_REENTERED',
+      );
+    }
+  }
   return { ...cheque, cheque_status: status };
+}
+
+// A3 (2026-10-25): a cheque handed back to the account that gave it is a return, not a payment.
+// Endorsing it there re-credited the party (if it had bounced) and debited them straight back, so
+// the Cash Book showed a payment that never happened — Dasti Lain Dain's 50,000 on 23/10. Return to
+// sender is the action that records it correctly.
+function assertNotBackToGiver(cheque, targetBaId) {
+  if (targetBaId && cheque.ba_id && Number(targetBaId) === Number(cheque.ba_id)) {
+    throw ApiError.conflict(
+      `This cheque came from ${cheque.account_name || 'this account'} — to give it back, use Return to sender instead.`,
+      'CHEQUE_BACK_TO_GIVER',
+    );
+  }
 }
 
 // After any disposal action, the cheque's status reflects the CURRENT action if it fully closes
@@ -246,6 +273,7 @@ async function endorseToVendor(chequeId, payload, userId, session) {
 
   const vendor = await vendorsService.getById(payload.vendor_id);
   if (!vendor.ba_id) throw ApiError.conflict('Vendor has no linked account yet', 'NO_VENDOR_ACCOUNT');
+  assertNotBackToGiver(cheque, vendor.ba_id);
   await businessAccountsService.assertAccessible(vendor.ba_id, session);
   // CHEQUES IN HAND is a business account under BANK ACCOUNTS now (migration 038), so this posts a
   // ba_id, exactly like the bank side of a deposit does — not the old chart ac_id.
@@ -286,6 +314,7 @@ async function endorseToExpense(chequeId, payload, userId, session) {
   if (!payload.allocation_date) throw ApiError.badRequest('allocation_date is required');
 
   const target = await businessAccountsService.getById(payload.target_ba_id);
+  assertNotBackToGiver(cheque, target.ba_id);
   // target_ba_id is any business account the operator picks, Directors Drawings included — this is
   // the same account-level guard receipts/expenses/settlements/JV already apply.
   await businessAccountsService.assertAccessible(payload.target_ba_id, session);

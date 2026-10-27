@@ -1118,6 +1118,9 @@ export interface ReceiptCreateInput {
   cheque_date?: string;
   cheque_received_date?: string;
   remarks?: string;
+  /** Sent only after the operator confirmed the DUPLICATE_CHEQUE prompt — this cheque number from
+   *  this party is already entered, and they say it is a different cheque (A1, 2026-10-25). */
+  allow_duplicate_cheque?: boolean;
 }
 
 export interface ReceiptListFilters {
@@ -2217,6 +2220,9 @@ declare global {
         unpostedReservations: (payload?: { excludeStockVoucherId?: number }) => Promise<ApiResult<UnpostedReservationRow[]>>;
         listDeletedNumbers: () => Promise<ApiResult<DeletedNumberRow[]>>;
       };
+      booksCheck: {
+        run: () => Promise<ApiResult<BooksCheckResult>>;
+      };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
         get: (payload: { id: number }) => Promise<ApiResult<SettlementRow>>;
@@ -3172,6 +3178,25 @@ export const stockVouchers = {
     window.api ? window.api.stockVouchers.unpostedReservations(excludeStockVoucherId != null ? { excludeStockVoucherId } : undefined) : Promise.resolve(NO_BRIDGE),
   listDeletedNumbers: (): Promise<ApiResult<DeletedNumberRow[]>> =>
     window.api ? window.api.stockVouchers.listDeletedNumbers() : Promise.resolve(NO_BRIDGE),
+};
+
+// Books Check (2026-10-25) — read-only checks the books must always pass; ADMIN only.
+export interface BooksCheckItem {
+  key: string;
+  title: string;
+  ok: boolean;
+  summary: string;
+  /** The exact records behind a failed check, one line each. */
+  rows: string[];
+}
+export interface BooksCheckResult {
+  ran_at: string;
+  ok: boolean;
+  checks: BooksCheckItem[];
+}
+export const booksCheck = {
+  run: () =>
+    window.api ? window.api.booksCheck.run() : Promise.resolve(NO_BRIDGE),
 };
 
 export const settlements = {

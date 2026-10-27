@@ -88,15 +88,14 @@ function setQuickMenuBottom(win, cssBottom) {
   return true;
 }
 
-// A new child window opens at the BOTTOM-RIGHT of the main window's screen, its top edge never above
-// the main window's Quick Menu bar (per the user, 2026-10-22: "any screen that open should not hide
-// the quick menu buttons"). If it doesn't fit below the bar at its default height it is made
-// shorter, down to MIN_CHILD_HEIGHT. Each further open window steps STEP up-left from the corner,
-// so the one underneath still peeks out — two windows at exactly the same spot look as if the first
-// had been minimized (reported by the user, 2026-09-07) — but never above the bar; with no room
-// left to step on an axis, windows share that edge.
+// A new child window opens in the CENTRE of the main window's screen, and every further one opens at
+// that same spot on top of the last, the earlier ones staying put behind it (per the user,
+// 2026-10-25 — replacing the bottom-right corner with an up-left step from 2026-10-22). Its top edge
+// still never goes above the main window's Quick Menu bar (per the user, 2026-10-22: "any screen
+// that open should not hide the quick menu buttons"), so it is centred across the screen and, top to
+// bottom, in the space BELOW the bar. If it doesn't fit there at its default height it is made
+// shorter, down to MIN_CHILD_HEIGHT.
 const MIN_CHILD_HEIGHT = 360;
-const STEP = 32;
 // Breathing room between the Quick Menu bar and a window's top edge.
 const BAR_GAP = 8;
 // On Linux (GNOME/Mutter) the title bar is drawn ABOVE the bounds a window is given — getBounds()
@@ -110,7 +109,6 @@ function childPlacement(width, height) {
   const display = mainUsable ? screen.getDisplayMatching(mainWindow.getBounds()) : screen.getPrimaryDisplay();
   const work = display.workArea;
   const workBottom = work.y + work.height;
-  const workRight = work.x + work.width;
 
   let top = work.y;
   if (mainUsable && quickMenuCssBottom > 0) {
@@ -120,12 +118,9 @@ function childPlacement(width, height) {
 
   const w = Math.min(width, work.width);
   const h = Math.max(Math.min(height, workBottom - top), Math.min(MIN_CHILD_HEIGHT, work.height));
-  const stepsX = Math.floor((work.width - w) / STEP) + 1;
-  const stepsY = Math.max(1, Math.floor((workBottom - top - h) / STEP) + 1);
-  const n = childWindows.size;
   return {
-    x: workRight - w - (n % stepsX) * STEP,
-    y: workBottom - h - (n % stepsY) * STEP,
+    x: work.x + Math.round((work.width - w) / 2),
+    y: top + Math.max(0, Math.round((workBottom - top - h) / 2)),
     width: w,
     height: h,
   };

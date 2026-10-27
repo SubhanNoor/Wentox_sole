@@ -61,6 +61,7 @@ function buildFields(payload) {
 // receipt actually comes in through.
 async function create(payload, userId, session) {
   validateHeader(payload);
+  await receiptsService.assertNotDuplicateCheque(payload);
   await businessAccountsService.assertAccessible(payload.ba_id, session);
 
   const draftId = await withTransaction((transaction) => repository.insert(transaction, {
@@ -79,6 +80,7 @@ async function create(payload, userId, session) {
 async function update(draftId, payload, userId, session) {
   await getById(draftId);
   validateHeader(payload);
+  await receiptsService.assertNotDuplicateCheque(payload, { excludeDraftId: draftId });
   await businessAccountsService.assertAccessible(payload.ba_id, session);
 
   await withTransaction((transaction) => repository.updateHeader(transaction, draftId, buildFields(payload)));

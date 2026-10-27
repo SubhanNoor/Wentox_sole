@@ -63,7 +63,14 @@ const TYPE_COLOR: Record<string, string> = {
   'Receipt (Jamma)': '#047857',
   'Sale Return': '#1d4ed8',
   Commission: '#b45309',
+  'Cheque Bounced': '#b91c1c',
+  'Cheque Returned': '#b91c1c',
+  'Bounce Undone': '#7c3aed',
 };
+
+// Rows whose narration explains WHAT happened to a cheque (bounced, returned, bounce undone) —
+// shown above the cheque number instead of being replaced by it, or they read as plain receipts.
+const EXPLAINED_CHEQUE_TYPES = new Set(['Cheque Bounced', 'Cheque Returned', 'Bounce Undone']);
 
 const TH: React.CSSProperties = { border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' };
 const TD: React.CSSProperties = { border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px' };
@@ -339,6 +346,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
               <td style={{ ...TD, padding: cellPad, color: '#0f172a' }}>
                 {row.chequeNo ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', lineHeight: '1.5' }}>
+                    {EXPLAINED_CHEQUE_TYPES.has(row.type) && row.narration && <span>{row.narration}</span>}
                     <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Cheque No:</span> {row.chequeNo}</span>
                     <span><span style={{ color: '#888888', fontWeight: 'bold' }}>Date:</span> {formatDate(row.chequeDate)}</span>
                   </div>

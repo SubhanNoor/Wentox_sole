@@ -14,13 +14,16 @@ WHERE le.source_type = 'RECEIPT' AND le.narration = CONCAT('Receipt #', le.sourc
 GROUP BY le.source_id
 HAVING COUNT(*) > 2;
 
--- 2. A receipt REVERSED twice (bounce / return-to-sender run twice at once).
-SELECT 'receipt reversed twice' AS problem, le.source_id AS receipt_id, le.narration, COUNT(*) AS rows_written
+-- 2. A receipt REVERSED twice (bounce / return-to-sender run twice at once). Each re-credit
+--    ("Bounce reversal undone") legitimately allows one more reversal — bounced, re-used, returned.
+SELECT 'receipt reversed twice' AS problem, le.source_id AS receipt_id,
+       SUM(CASE WHEN le.narration LIKE 'BOUNCED reversal of receipt #%' OR le.narration LIKE 'RETURNED reversal of receipt #%' THEN 1 ELSE 0 END) AS reversal_rows,
+       SUM(CASE WHEN le.narration LIKE 'Bounce reversal undone%' THEN 1 ELSE 0 END) AS recredit_rows
 FROM dbo.ledger_entries le
 WHERE le.source_type = 'RECEIPT'
-  AND (le.narration LIKE 'BOUNCED reversal of receipt #%' OR le.narration LIKE 'RETURNED reversal of receipt #%')
-GROUP BY le.source_id, le.narration
-HAVING COUNT(*) > 2;
+GROUP BY le.source_id
+HAVING SUM(CASE WHEN le.narration LIKE 'BOUNCED reversal of receipt #%' OR le.narration LIKE 'RETURNED reversal of receipt #%' THEN 1 ELSE 0 END)
+     > 2 + SUM(CASE WHEN le.narration LIKE 'Bounce reversal undone%' THEN 1 ELSE 0 END);
 
 -- 3. An expense POSTED twice.
 SELECT 'expense posted twice' AS problem, le.source_id AS expense_id, COUNT(*) AS original_rows

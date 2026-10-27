@@ -19,7 +19,7 @@
 import { isWriteChannel, announceDataChanged } from './dataChanged';
 
 const FEATURES = [
-  'auth', 'accountClasses', 'addas', 'alerts', 'backup', 'bankAccounts', 'businessAccounts', 'categories', 'chartAccounts', 'cheques',
+  'auth', 'accountClasses', 'addas', 'alerts', 'backup', 'bankAccounts', 'booksCheck', 'businessAccounts', 'categories', 'chartAccounts', 'cheques',
   'cities', 'customers', 'draftExpenses', 'draftPurchases', 'draftPurchaseReturns', 'draftReceipts',
   'draftSaleBills', 'draftSaleReturns', 'employees', 'expenses', 'expenseVouchers',
   'groupAccounts', 'products', 'productColors', 'purchases', 'purchaseReturns', 'receipts',

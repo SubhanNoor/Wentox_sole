@@ -124,8 +124,42 @@ async function insertReceipt(transaction, payload, userId) {
 // transfers/wage_runs/salary_runs. A CHEQUE-mode receipt also creates the linked cheques row here
 // (PENDING) — the cheque physically exists once the customer hands it over, independent of
 // whether this receipt has been posted to the ledger yet.
+// "receipt #1857 on voucher 103 (19/10/2026)" — how a guard names the record already holding a cheque.
+function describeSameCheque(found) {
+  const d = new Date(found.doc_date);
+  const day = Number.isNaN(d.getTime()) ? '' : ` (${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()})`;
+  const what = found.kind === 'POSTED' ? `receipt #${found.doc_id}` : 'an unposted line';
+  return `${what}${found.voucher_no != null ? ` on voucher ${found.voucher_no}` : ''}${day}`;
+}
+
+// A1 (2026-10-25): receiving a cheque number this party has already given — and that has not been
+// returned to them — is refused unless the operator confirms it really is a different cheque
+// (allow_duplicate_cheque, sent after the screen's confirm prompt). A warning rather than a block:
+// two banks can occasionally print the same number. Entering one paper cheque twice is what
+// credited Dasti and Dilshad twice.
+async function assertNotDuplicateCheque(payload, { excludeReceiptId = null, excludeDraftId = null } = {}) {
+  if (payload.payment_mode !== 'CHEQUE' || !payload.cheque_no || payload.allow_duplicate_cheque) return;
+  const found = await repository.findSameCheque({
+    baId: payload.ba_id, chequeNo: payload.cheque_no, excludeReceiptId, excludeDraftId,
+  });
+  if (found) {
+    throw ApiError.conflict(
+      `Cheque ${String(payload.cheque_no).trim()} from this party is already entered as ${describeSameCheque(found)}. Save again only if this is a different cheque.`,
+      'DUPLICATE_CHEQUE',
+    );
+  }
+}
+
+// A2's lookup (cheques.service.js#lockForDisposal): the same paper cheque entered again on another
+// record, other than this cheque's own receipt.
+function findChequeReentry(cheque) {
+  if (!cheque.cheque_no) return null;
+  return repository.findSameCheque({ baId: cheque.ba_id, chequeNo: cheque.cheque_no, excludeReceiptId: cheque.receipt_id });
+}
+
 async function create(payload, userId, session) {
   validateHeader(payload);
+  await assertNotDuplicateCheque(payload);
   // UC-03 point 4 — receiving money INTO a restricted account is the same exposure as paying out
   // of one, and receipts:create was never covered by any role check.
   await businessAccountsService.assertAccessible(payload.ba_id, session);
@@ -141,6 +175,7 @@ async function update(receiptId, payload, userId, session) {
     throw ApiError.conflict('Unpost the receipt before editing', 'POSTED_LOCK');
   }
   validateHeader(payload);
+  await assertNotDuplicateCheque(payload, { excludeReceiptId: receiptId });
   await businessAccountsService.assertAccessible(payload.ba_id, session);
 
   await withTransaction(async (transaction) => {
@@ -386,4 +421,5 @@ async function unconfirm(receiptId, session) {
 module.exports = {
   list, getById, create, update, remove, post, unpost, unconfirm, resolveDebitSide,
   insertReceipt, postWithinTransaction, resolveDateRange,
+  assertNotDuplicateCheque, findChequeReentry, describeSameCheque,
 };

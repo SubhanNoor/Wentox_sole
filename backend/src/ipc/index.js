@@ -8,6 +8,7 @@ const registerAddas = require('./addas.ipc');
 const registerBackup = require('./backup.ipc');
 const registerBankAccounts = require('./bankAccounts.ipc');
 const registerBusinessAccounts = require('./businessAccounts.ipc');
+const registerBooksCheck = require('./booksCheck.ipc');
 const registerCategories = require('./categories.ipc');
 const registerChartAccounts = require('./chartAccounts.ipc');
 const registerCheques = require('./cheques.ipc');
@@ -58,6 +59,7 @@ module.exports = function registerIpcHandlers() {
   registerBackup();
   registerBankAccounts();
   registerBusinessAccounts();
+  registerBooksCheck();
   registerCategories();
   registerChartAccounts();
   registerCheques();
