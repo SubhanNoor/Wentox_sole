@@ -9051,3 +9051,13 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
   - The new e2e passes in Electron: the red notice names the duplicate; Receipts stops at the prompt and saves once confirmed.
   - The Receipts, master/detail and window e2e tests pass (13/13).
   - tsc clean; ESLint clean for the new and changed files (ReceiptsPage's existing lint errors are unchanged).
+
+### 2026-10-27 — Cheque 10948663 (Dilshad) corrected; Books Check no longer counts a bounced record as a duplicate
+- **Data (client copy `wentox_bak_20261024` only; nothing written to wentox_prod):** on 23/10 the old bounced record (receipt #1072, cheque 223) was paid to DASTI LAIN DAIN instead of its re-entry (receipt #1158, cheque 243), which re-credited Dilshad a second time. The user confirmed Dasti really got the cheque. In one transaction:
+  - deleted the "Bounce reversal undone (re-credit)" pair (entries 104994/104995);
+  - moved allocation 120 (the Dasti payment) to receipt #1158 and relabelled its two postings `Cheque #243 to expense`;
+  - cheque 243 → CLEARED, cheque 223 → BOUNCED.
+  - Dilshad 370,660 → 470,660; Cheques in Hand 5,362,000 → 5,262,000; Dasti unchanged; debits = credits.
+- **Code:** `booksCheck.repository.js#duplicateCheques` leaves out BOUNCED records as well as RETURNED. The bounce reversed the credit, so a bounced cheque entered again is one credit, not two. A re-used bounced record leaves BOUNCED and counts again. This matches `chequesInHand()`, which already skipped BOUNCED.
+- **Files:** `src/repositories/booksCheck.repository.js`, `test/books.safeguards.test.js` (new test: a bounced cheque re-entered is not a duplicate).
+- **Verified:** the new test fails without the change and passes with it; backend 61/61. On the client copy, Books Check now flags only 44782060 (Dasti Lain Dain), which is still to be corrected.

@@ -144,6 +144,20 @@ test('B: the Books Check names a cheque entered twice, and clears once it is gon
   assert.ok(!mentions(await booksCheckService.run()), 'a returned duplicate no longer counts');
 });
 
+test('B: a bounced cheque entered again as a new receipt is not a duplicate', async (t) => {
+  const extra = extraCleanup(t);
+  const { customer, created } = await setupChequeFixtures(t);
+  const chequeNo = uniqueName('BNCRE');
+  const old = await postedCheque(customer.ba_id, chequeNo);
+  created.receiptId = old.receipt_id;
+  await chequesService.bounce(old.cheque_id, { bounced_date: '2026-04-05' }, null);
+  const again = await postedCheque(customer.ba_id, chequeNo, { allow_duplicate_cheque: true });
+  extra.receiptIds.push(again.receipt_id);
+
+  const duplicates = (await booksCheckService.run()).checks.find((c) => c.key === 'duplicate_cheques');
+  assert.ok(!duplicates.rows.some((r) => r.includes(chequeNo)), `wrongly flagged: ${duplicates.rows.join(' | ')}`);
+});
+
 test('B: a receipt bounced, re-used, then returned is not reported as reversed twice', async (t) => {
   const { customer, vendor, created } = await setupChequeFixtures(t);
   const r = await postedCheque(customer.ba_id, uniqueName('REV'));

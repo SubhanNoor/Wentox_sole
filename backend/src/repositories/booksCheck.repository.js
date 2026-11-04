@@ -28,7 +28,9 @@ async function chequesInHand(chequesBaId) {
   return { ledger: Number(ledger.recordset[0].net), held: Number(held.recordset[0].net) };
 }
 
-// One paper cheque on two live records: same party, same cheque number, neither returned.
+// One cheque number from one party on more than one live receipt. A BOUNCED record is left out like
+// a RETURNED one: the bounce reversed its credit, so a bounced cheque entered again as a new receipt
+// is one credit, not two. If the bounced record is ever re-used it leaves BOUNCED and counts again.
 async function duplicateCheques() {
   const result = await query(
     `SELECT LTRIM(RTRIM(ch.cheque_no)) AS cheque_no, ba.name AS party, COUNT(*) AS records,
@@ -37,7 +39,7 @@ async function duplicateCheques() {
      FROM dbo.cheques ch
      JOIN dbo.receipts r ON r.receipt_id = ch.receipt_id
      JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id
-     WHERE r.status = 'CONFIRMED' AND ch.cheque_status <> 'RETURNED'
+     WHERE r.status = 'CONFIRMED' AND ch.cheque_status NOT IN ('BOUNCED', 'RETURNED')
        AND ch.cheque_no IS NOT NULL AND LTRIM(RTRIM(ch.cheque_no)) <> ''
      GROUP BY LTRIM(RTRIM(ch.cheque_no)), r.ba_id, ba.name
      HAVING COUNT(*) > 1
