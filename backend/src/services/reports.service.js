@@ -906,11 +906,13 @@ async function cashBook(filters = {}) {
   // Direction comes from the document type rather than from a cash leg, because there is no ledger
   // to read: a receipt brings money in, an expense sends it out. FROM/TO then follow the same rule
   // as the posted rows — FROM is where the money leaves, TO where it lands.
+  const UNPOSTED_LABELS = { RECEIPT: 'Receipt', EXPENSE: 'Expense', SETTLEMENT: 'Settlement' };
   let unpostedSeq = txnSeq;
   for (const u of unpostedRaw) {
     unpostedSeq += 1;
     const amount = Number(u.amount);
-    const isIn = u.kind === 'RECEIPT';
+    // A settlement's party_* is the debtor it credits, so it reads FROM party TO money like a receipt.
+    const isIn = u.kind !== 'EXPENSE';
     const isCashPair = u.touches_cash === 1;
     // A draft table carries no CHECK constraints, so a malformed draft (ONLINE naming no account,
     // say) can reach here with no far side. It still prints, named as such — that is exactly the
@@ -921,7 +923,7 @@ async function cashBook(filters = {}) {
     const to = isIn ? money : party;
     const base = {
       date: toISODate(u.entry_date),
-      remarks: u.remarks || `${isIn ? 'Receipt' : 'Expense'} — not yet posted`,
+      remarks: u.remarks || `${UNPOSTED_LABELS[u.kind]} — not yet posted`,
       // The draft's own mode, same as the posted side — CHEQUE_ISSUED/CHEQUE_ENDORSED both read
       // CHEQUE, since that distinction matters to the posting engine and not to a day book.
       mode: u.payment_mode ? (u.payment_mode.startsWith('CHEQUE') ? 'CHEQUE' : u.payment_mode) : (isCashPair ? 'CASH' : 'CHEQ./ONLINE'),

@@ -729,6 +729,17 @@ async function cashBookUnpostedSides({ date_from, date_to }, { cashAcId, cheques
      LEFT JOIN dbo.chart_of_accounts ca
             ON ca.ac_id = CASE de.payment_mode WHEN 'CASH' THEN @cashAcId END
      WHERE de.expense_date >= @dateFrom AND de.expense_date <= @dateTo
+     UNION ALL
+     -- Direct settlement drafts (2026-11-05). Both ends are outside parties: FROM is the debtor it
+     -- will credit (party_*), TO the creditor it will debit (money_*). It never touches cash.
+     SELECT 'SETTLEMENT', st.settlement_id, st.settlement_date, st.created_at, st.amount,
+            st.payment_mode, st.remarks, st.cheque_no,
+            fba.name, fba.code, tba.name, tba.code, 0
+     FROM dbo.settlements st
+     LEFT JOIN dbo.business_accounts fba ON fba.ba_id = st.from_ba_id
+     LEFT JOIN dbo.business_accounts tba ON tba.ba_id = st.to_ba_id
+     WHERE st.status = 'DRAFT'
+       AND st.settlement_date >= @dateFrom AND st.settlement_date <= @dateTo
      ORDER BY entry_date, kind, source_id`,
     {
       dateFrom: { type: sql.Date, value: date_from },
@@ -834,14 +845,21 @@ async function cashBookTransactionSides({ date_from, date_to }, { cashAcId, bank
        WHERE le.entry_date >= @dateFrom AND le.entry_date <= @dateTo
          AND (le.ac_id IN (@cashAcId, @bankAcId, @chequesAcId)
               OR ba.ac_id IN (@cashAcId, @bankAcId, @chequesAcId)
+              -- SETTLEMENT (2026-11-05): a direct settlement is between two outside parties, so
+              -- (a) only caught the ones that happened to name a bank; customer -> vendor ones
+              -- never showed.
               OR le.source_type IN ('RECEIPT', 'EXPENSE', 'TRANSFER', 'DEPOSIT',
-                                    'CHEQUE_ALLOCATION', 'COMMISSION'))
+                                    'CHEQUE_ALLOCATION', 'COMMISSION', 'SETTLEMENT'))
          -- OPENING is a bookkeeping seed against OPENING BALANCE EQUITY, not money moving between
          -- two parties, and it is posted on the day an account is CREATED — so adding a bank with
          -- a 7,500,000 opening balance would otherwise land a 7,500,000 "transaction" in that
          -- day's book and swamp every real movement. The balance it establishes is already carried
          -- by every account balance, and by Opening Cash on this very report.
          AND le.source_type <> 'OPENING'
+         -- Journal vouchers are adjustments between ledgers, not money anyone handed over that
+         -- day, and are not printed in the Cash Book (per the user, 2026-11-05). They stay on every
+         -- ledger. None posts to CASH IN HAND, so the cash summary is unchanged by leaving them out.
+         AND le.source_type <> 'JOURNAL_VOUCHER'
          -- is_internal (migration 045): bookkeeping kept on the ledgers but not a movement anyone
          -- made that day — today only the re-credit a bounced cheque gets when it is used again
          -- (cheques.service.js#recreditIfBounced). Printed, it made one hand-over read as two
@@ -876,11 +894,13 @@ async function cashBookTransactionSides({ date_from, date_to }, { cashAcId, bank
                                                JOIN dbo.receipts rc2 ON rc2.receipt_id = ca.receipt_id
                                                JOIN dbo.cheques ch3 ON ch3.cheque_id = rc2.cheque_id
                                               WHERE ca.allocation_id = le.source_id)
+              WHEN 'SETTLEMENT' THEN (SELECT st.cheque_no FROM dbo.settlements st WHERE st.settlement_id = le.source_id)
             END AS doc_cheque_no,
             CASE le.source_type
               WHEN 'RECEIPT' THEN (SELECT rc.payment_mode FROM dbo.receipts rc WHERE rc.receipt_id = le.source_id)
               WHEN 'EXPENSE' THEN (SELECT ex.payment_mode FROM dbo.expenses ex WHERE ex.expense_id = le.source_id)
               WHEN 'CHEQUE_ALLOCATION' THEN 'CHEQUE'
+              WHEN 'SETTLEMENT' THEN (SELECT st.payment_mode FROM dbo.settlements st WHERE st.settlement_id = le.source_id)
             END AS doc_payment_mode
      FROM money_lines m
      JOIN dbo.ledger_entries le
