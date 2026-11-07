@@ -9061,3 +9061,12 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
 - **Code:** `booksCheck.repository.js#duplicateCheques` leaves out BOUNCED records as well as RETURNED. The bounce reversed the credit, so a bounced cheque entered again is one credit, not two. A re-used bounced record leaves BOUNCED and counts again. This matches `chequesInHand()`, which already skipped BOUNCED.
 - **Files:** `src/repositories/booksCheck.repository.js`, `test/books.safeguards.test.js` (new test: a bounced cheque re-entered is not a duplicate).
 - **Verified:** the new test fails without the change and passes with it; backend 61/61. On the client copy, Books Check now flags only 44782060 (Dasti Lain Dain), which is still to be corrected.
+
+## 2026-11-07 — Cheque 10948663: deposited, not paid to Dasti (migration 047)
+- 046 skipped on the client: on 04/11 the re-entered record (#1158) was deposited into BANK ALHABIB, so 046's guard saw an allocation on it. User confirmed the cheque went to the bank and DASTI LAIN DAIN never got it.
+- `src/db/migrations/047_fix_cheque_10948663_deposited_not_paid.sql`: deletes the 23/10 re-credit pair and the 23/10 Dasti payment (allocation + 2 rows), old record back to BOUNCED; deposit kept. Guarded to exactly this state (no commission, payment not linked to an expense).
+- Verified on a restore of the 06-11 client backup: Dilshad 370,660 → 470,660, Dasti −16,016,753 → −16,116,753, Alhabib and Cheques in Hand unchanged, trial balance equal; rerun and wentox_test are no-ops. Debugger review: no blocking issues; its two hardening suggestions applied.
+
+## 2026-11-07 — Cheque Ledger: a reversal gets its own row
+- The ledger only marked a reversed endorsement/deposit REVERSED; the reversal date was nowhere. `cheques.repository.js#listAllocations` now returns `reversed_date` and `reversal_kind` (from the reversal's CHEQUE_ALLOCATION ledger rows); `ChequeLedgerContent.tsx` adds an "Endorsement Reversed" / "Deposit Reversed" row on that date. Skipped only when the cheque's own Bounced/Returned row already sits on the same date (a cheque keeps only its latest bounce date, so an earlier bounce still gets its row). Type in `frontend/src/lib/api.ts`.
+- Verified: `npx tsc -b`, cheque + Books Check tests (sequential), and the dates on the 06-11 client copy. Debugger review: two gaps (second bounce on another date, Return to sender doubled) — both fixed.
