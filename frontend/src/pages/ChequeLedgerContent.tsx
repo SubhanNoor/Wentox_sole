@@ -16,7 +16,8 @@ import { useDataVersion } from '@/hooks/useDataVersion';
 // Every event a cheque's life can produce — a small fixed enum, so distinct colors per event
 // (same spirit as ChequesTab.tsx's own STATUS_STYLES) don't run into the "badge color from
 // arbitrary text" issue fixed elsewhere (Overall Search, Current Stock).
-type EventType = 'Received' | 'Issued' | 'Deposited' | 'Endorsed to Vendor' | 'Endorsed to Expense' | 'Bounced' | 'Returned';
+type EventType = 'Received' | 'Issued' | 'Deposited' | 'Endorsed to Vendor' | 'Endorsed to Expense'
+  | 'Deposit Reversed' | 'Endorsement Reversed' | 'Bounced' | 'Returned';
 
 // Event colours in the report document (the old on-screen badges' text colours, per the user
 // 2026-10-14), as hex: the document is drawn with inline styles so the preview carries them too.
@@ -26,6 +27,8 @@ const EVENT_TEXT_COLOR: Record<EventType, string> = {
   Deposited: '#1d4ed8',
   'Endorsed to Vendor': '#6d28d9',
   'Endorsed to Expense': '#6d28d9',
+  'Deposit Reversed': '#b45309',
+  'Endorsement Reversed': '#b45309',
   Bounced: '#be123c',
   Returned: '#c2410c',
 };
@@ -81,6 +84,26 @@ function receivedEvents(c: ChequeRow, allocations: ChequeAllocationRow[]): Ledge
       amount: a.amount,
       reversed: a.status === 'REVERSED',
     });
+    // The reversal on its own date. A step undone by the bounce or return the cheque's own Bounced /
+    // Returned row below shows (same date) is left to that row — two rows would show it twice. An
+    // earlier bounce on another date still gets its row: the cheque keeps only the latest date.
+    const reversedOn = a.reversed_date ? toDateInputValue(a.reversed_date) : '';
+    const shownBelow = (a.reversal_kind === 'BOUNCED' && reversedOn === toDateInputValue(c.bounced_date))
+      || (a.reversal_kind === 'RETURNED' && reversedOn === toDateInputValue(c.returned_date));
+    if (a.status === 'REVERSED' && reversedOn && !shownBelow) {
+      events.push({
+        key: `received-${c.cheque_id}-alloc-${a.allocation_id}-reversal`,
+        dueDate: c.cheque_date,
+        chequeType: 'Received',
+        chequeNo: c.cheque_no,
+        date: reversedOn,
+        eventType: a.disposition_type === 'DEPOSIT' ? 'Deposit Reversed' : 'Endorsement Reversed',
+        party: a.vendor_name || a.target_name || '-',
+        bank: a.disposition_type === 'DEPOSIT' ? (a.bank_name || '-') : '-',
+        amount: a.amount,
+        reversed: false,
+      });
+    }
   }
 
   if (c.bounced_date) {
@@ -229,10 +252,11 @@ export function ChequeLedgerContent() {
   }, [events, typeFilter, search, fromDate, toDate]);
 
   const totals = useMemo(() => {
-    const totalAmount = ledgerRows.reduce((s, r) => s + r.amount, 0);
-    const totalReceived = ledgerRows.filter(r => r.chequeType === 'Received').reduce((s, r) => s + r.amount, 0);
-    const totalIssued = ledgerRows.filter(r => r.chequeType === 'Issued').reduce((s, r) => s + r.amount, 0);
-    return { totalAmount, totalReceived, totalIssued };
+    // Money totals count each cheque once — on its own Received / Issued row. What happens to it
+    // later (deposit, endorsement, reversal, bounce) is the same money moving, not more of it.
+    const totalReceived = ledgerRows.filter(r => r.eventType === 'Received').reduce((s, r) => s + r.amount, 0);
+    const totalIssued = ledgerRows.filter(r => r.eventType === 'Issued').reduce((s, r) => s + r.amount, 0);
+    return { totalAmount: totalReceived + totalIssued, totalReceived, totalIssued };
   }, [ledgerRows]);
 
   const handleExportExcel = () => {

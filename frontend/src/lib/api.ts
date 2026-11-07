@@ -1178,6 +1178,10 @@ export interface ChequeAllocationRow {
   allocation_date: string;
   remarks: string | null;
   status: 'ACTIVE' | 'REVERSED';
+  /** From the reversal's ledger rows (allocationsForReceipt only) — null while ACTIVE. */
+  reversed_date?: string | null;
+  /** What undid it: the cheque bouncing, being returned to sender, or an Endorsement reversal. */
+  reversal_kind?: 'BOUNCED' | 'RETURNED' | 'REVERSAL' | null;
   vendor_name?: string;
   target_name?: string;
   bank_name?: string;

@@ -298,11 +298,25 @@ async function detachAllocationFromExpense(transaction, allocationId) {
 
 async function listAllocations(receiptId) {
   const result = await query(
-    `SELECT ca.*, v.name AS vendor_name, ba.name AS target_name, bank.name AS bank_name
+    `SELECT ca.*, v.name AS vendor_name, ba.name AS target_name, bank.name AS bank_name,
+            rev.reversed_date, rev.reversal_kind
      FROM dbo.cheque_allocations ca
      LEFT JOIN dbo.vendors v ON v.vendor_id = ca.target_vendor_id
      LEFT JOIN dbo.business_accounts ba ON ba.ba_id = ca.target_ba_id
      LEFT JOIN dbo.bank_accounts bank ON bank.bank_id = ca.bank_id
+     -- The allocation row keeps only its status; WHEN it was reversed lives on the reversal's own
+     -- ledger pair (cheques.service.js#undoAllocation), dated with the date the user gave.
+     OUTER APPLY (
+       SELECT MIN(le.entry_date) AS reversed_date,
+              -- BOUNCED / RETURNED: the whole cheque went back (bounce or Return to sender);
+              -- REVERSAL: only this step was undone (Endorsement reversal)
+              MAX(CASE WHEN le.narration LIKE 'BOUNCED reversal%' THEN 'BOUNCED'
+                       WHEN le.narration LIKE 'RETURNED reversal%' THEN 'RETURNED'
+                       ELSE 'REVERSAL' END) AS reversal_kind
+       FROM dbo.ledger_entries le
+       WHERE le.source_type = 'CHEQUE_ALLOCATION' AND le.source_id = ca.allocation_id
+         AND le.narration LIKE '%reversal%'
+     ) rev
      WHERE ca.receipt_id = @receiptId
      ORDER BY ca.allocation_id`,
     { receiptId: { type: sql.Int, value: receiptId } },
