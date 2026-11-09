@@ -10,6 +10,10 @@ const CODES = require('../constants/reservedAccounts');
 // "Pick the month" — the screen only ever asks for a month, so any date given is truncated to
 // its first-of-month, matching CK_salary_runs_month (DAY(period_month) = 1) without making the
 // caller get the day right.
+//
+// That first-of-month is also the run's posted/ledger date (per the client 2026-11-09; it was the
+// last day of the month before) — never "today" and never client-supplied, so a run created on the
+// 3rd and posted on the 8th still reads as the 1st.
 function normalizeMonth(dateStr) {
   if (!dateStr) throw ApiError.badRequest('period_month is required');
   const d = new Date(dateStr);
@@ -18,19 +22,8 @@ function normalizeMonth(dateStr) {
   return first.toISOString().slice(0, 10);
 }
 
-// Salary is always FOR the current month, so its posted/ledger date is always the LAST calendar
-// day of period_month — never "today" (a run created on the 3rd and posted on the 8th must still
-// read as the 30th/31st) and never client-supplied. period_month is already UTC-normalized by
-// normalizeMonth(), so this stays in UTC to match (see the note on dates.js — that local-date
-// helper is deliberately NOT used for this table).
-function lastDayOfMonth(periodMonthISO) {
-  const d = new Date(periodMonthISO);
-  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
-  return last.toISOString().slice(0, 10);
-}
-
 // "Salary for [Month] [Year]" — the fixed narration for every salary-run ledger entry. UTC to
-// match period_month's own UTC normalization, same reasoning as lastDayOfMonth().
+// match period_month's own UTC normalization.
 function salaryNarration(periodMonthISO) {
   const d = new Date(periodMonthISO);
   const month = d.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
@@ -104,7 +97,7 @@ async function create(payload, userId) {
   const id = await withTransaction(async (transaction) => {
     const salaryRunId = await repository.insert(transaction, {
       period_month: periodMonth,
-      run_date: lastDayOfMonth(periodMonth),
+      run_date: periodMonth, // see normalizeMonth()
       total_amount: totalAmount,
       created_by: userId,
     });
@@ -136,7 +129,7 @@ async function update(salaryRunId, payload, userId) {
   await withTransaction(async (transaction) => {
     await repository.updateHeader(transaction, salaryRunId, {
       period_month: periodMonth,
-      run_date: lastDayOfMonth(periodMonth),
+      run_date: periodMonth, // see normalizeMonth()
       total_amount: totalAmount,
       updated_by: userId,
     });

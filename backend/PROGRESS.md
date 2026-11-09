@@ -9070,3 +9070,15 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
 ## 2026-11-07 — Cheque Ledger: a reversal gets its own row
 - The ledger only marked a reversed endorsement/deposit REVERSED; the reversal date was nowhere. `cheques.repository.js#listAllocations` now returns `reversed_date` and `reversal_kind` (from the reversal's CHEQUE_ALLOCATION ledger rows); `ChequeLedgerContent.tsx` adds an "Endorsement Reversed" / "Deposit Reversed" row on that date. Skipped only when the cheque's own Bounced/Returned row already sits on the same date (a cheque keeps only its latest bounce date, so an earlier bounce still gets its row). Type in `frontend/src/lib/api.ts`.
 - Verified: `npx tsc -b`, cheque + Books Check tests (sequential), and the dates on the 06-11 client copy. Debugger review: two gaps (second bounce on another date, Return to sender doubled) — both fixed.
+
+## 2026-11-08 — Product Ledger: Opening / In / Return / Total Stock / Out / Balance, Pairs or Cartons
+- Client request (after their old software): Summary columns Opening Stock, In (stock vouchers), Return (sale returns), Total Stock = Opening + In + Return, Out (sale bills), Balance = Total Stock − Out. Bucketed by `stock_movements.source_type`, not sign — a sale bill's unpost/edit writes positive ADJUSTMENT rows that now reduce Out instead of inflating In. Movements with no sale document (production, opening, manual adjustment) go to In.
+- Pairs | Cartons toggle; cartons print as a decimal to two places (25 pairs at packing 24 = 1.04), packing = colour's own else the article's. Report totals add each line's own cartons. Detailed view has In / Return / Out columns and a document-based Type label.
+- The Stock & Production Center's Product Ledger tab now renders the same `ProductLedgerContent` as Reports (its old movement table, filters and export removed from `ReportStockPage.tsx`).
+- Files: `backend/src/repositories/reports.repository.js`, `backend/src/services/reports.service.js`, `backend/test/reports.productLedger.test.js`, `frontend/src/lib/api.ts`, `frontend/src/pages/ProductLedgerContent.tsx`, `frontend/src/pages/ReportStockPage.tsx`.
+- Verified: `npx tsc -b`; product ledger tests 3/3 on wentox_test; on the 06-11 client copy Balance = Total Stock − Out on all 180 lines.
+
+## 2026-11-09 — Salary runs post on the 1st of their month
+- Client request: a salary run is dated the first of the month it is for, not the last day. `salaryRuns.service.js` now sets `run_date` to `period_month` on create and edit, and the ledger rows take that date at posting.
+- `src/db/migrations/048_salary_runs_post_on_first_of_month.sql` moves existing runs (drafts included) and their ledger rows to the 1st. Dates only, within the same month.
+- Verified: new `test/salaryRuns.postDate.test.js` on wentox_test; 048 on a throwaway restore of the 06-11 client copy moved the 4 posted runs (40 ledger rows), all 320 account balances and the trial balance identical before and after, rerun affects 0 rows.
