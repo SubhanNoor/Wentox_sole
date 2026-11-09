@@ -76,14 +76,26 @@ function production(filters = {}) {
 }
 
 // UC-29/UC-38 Product Ledger — every stock_movements row (PRODUCTION, SALE, SALE_RETURN, OPENING,
-// ADJUSTMENT), split into Debit(IN)/Credit(OUT) by the sign SQL Server already enforces
-// (CK_stock_movements_sign): positive = IN, negative = OUT.
+// ADJUSTMENT). `debit`/`credit` on each row are the plain sign split (positive = in, negative =
+// out, CK_stock_movements_sign).
 //
-// `products` is the client's one-line-per-product view (2026-10-12): one line per product+colour
-// with Opening (stock before date_from), In, Out and Balance = Opening + In - Out, i.e. the stock
-// on date_to. A product+colour appears if it had opening stock or moved in the period. Each row
-// also carries `running_balance` within its product+colour, for the Detailed view. `rows`,
-// `total_in`, `total_out` and `net` are unchanged — the Stock page's movement ledger still reads them.
+// `products` is one line per product+colour (client 2026-10-12, columns per the client 2026-11-08,
+// after their old software): Opening (stock before date_from), In, Return, Total Stock = Opening +
+// In + Return, Out, Balance = Total Stock - Out = the stock on date_to. The columns go by the
+// DOCUMENT that moved the stock, not the sign: a sale bill's unpost/edit writes positive ADJUSTMENT
+// rows that put pairs back, and those reduce Out rather than adding to In. See movementBucket().
+// A product+colour appears if it had opening stock or moved in the period. Each row also carries
+// its `bucket` and `running_balance` within its product+colour, for the Detailed view.
+const OUT_SOURCES = ['SALE_BILL', 'DRAFT_SALE_BILL'];
+const RETURN_SOURCES = ['SALE_RETURN', 'DRAFT_SALE_RETURN'];
+// IN is the Stock Voucher, plus anything entered straight onto stock (production, opening, manual
+// adjustment) — stock coming in that no sale document moved.
+function movementBucket(sourceType) {
+  if (OUT_SOURCES.includes(sourceType)) return 'OUT';
+  if (RETURN_SOURCES.includes(sourceType)) return 'RETURN';
+  return 'IN';
+}
+
 async function productLedger(filters = {}) {
   const range = resolveDateRange(filters);
   const articleFilters = {
@@ -109,8 +121,11 @@ async function productLedger(filters = {}) {
         color: r.color,
         category_name: r.category_name,
         vendor_name: r.vendor_name,
+        packing: r.effective_packing,
         opening: 0,
         in: 0,
+        returned: 0,
+        total_stock: 0,
         out: 0,
         balance: 0,
       };
@@ -131,19 +146,27 @@ async function productLedger(filters = {}) {
     const credit = r.qty_pairs < 0 ? -r.qty_pairs : 0;
     totalIn += debit;
     totalOut += credit;
+    const bucket = movementBucket(r.source_type);
     const p = productFor(r);
-    p.in += debit;
-    p.out += credit;
+    if (bucket === 'OUT') p.out -= r.qty_pairs;
+    else if (bucket === 'RETURN') p.returned += r.qty_pairs;
+    else p.in += r.qty_pairs;
     p.balance += r.qty_pairs;
-    return { ...r, debit, credit, running_balance: p.balance };
+    return { ...r, debit, credit, bucket, running_balance: p.balance };
   });
+  for (const p of products.values()) p.total_stock = p.opening + p.in + p.returned;
 
   const productList = [...products.values()].sort((a, b) =>
     String(a.article_code).localeCompare(String(b.article_code), undefined, { numeric: true })
     || String(a.color).localeCompare(String(b.color)));
   const totals = productList.reduce((t, p) => ({
-    opening: t.opening + p.opening, in: t.in + p.in, out: t.out + p.out, balance: t.balance + p.balance,
-  }), { opening: 0, in: 0, out: 0, balance: 0 });
+    opening: t.opening + p.opening,
+    in: t.in + p.in,
+    returned: t.returned + p.returned,
+    total_stock: t.total_stock + p.total_stock,
+    out: t.out + p.out,
+    balance: t.balance + p.balance,
+  }), { opening: 0, in: 0, returned: 0, total_stock: 0, out: 0, balance: 0 });
 
   return {
     rows: mapped, total_in: totalIn, total_out: totalOut, net: totalIn - totalOut,

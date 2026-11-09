@@ -85,7 +85,7 @@ async function productLedger(filters = {}) {
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
     `SELECT sm.*, ac.color, a.article_id, a.code AS article_code, a.name AS article_name,
-            c.name AS category_name, v.name AS vendor_name
+            c.name AS category_name, v.name AS vendor_name, COALESCE(ac.packing, a.packing) AS effective_packing
      FROM dbo.stock_movements sm
      JOIN dbo.article_colors ac ON ac.variant_id = sm.variant_id
      JOIN dbo.articles a ON a.article_id = ac.article_id
@@ -108,14 +108,15 @@ async function productLedgerOpening(filters = {}) {
   productLedgerArticleConditions(filters, conditions, params);
   const result = await query(
     `SELECT sm.variant_id, ac.color, a.article_id, a.code AS article_code, a.name AS article_name,
-            c.name AS category_name, v.name AS vendor_name, SUM(sm.qty_pairs) AS opening
+            c.name AS category_name, v.name AS vendor_name, COALESCE(ac.packing, a.packing) AS effective_packing,
+            SUM(sm.qty_pairs) AS opening
      FROM dbo.stock_movements sm
      JOIN dbo.article_colors ac ON ac.variant_id = sm.variant_id
      JOIN dbo.articles a ON a.article_id = ac.article_id
      JOIN dbo.product_categories c ON c.category_id = a.category_id
      JOIN dbo.vendors v ON v.vendor_id = a.vendor_id
      WHERE ${conditions.join(' AND ')}
-     GROUP BY sm.variant_id, ac.color, a.article_id, a.code, a.name, c.name, v.name
+     GROUP BY sm.variant_id, ac.color, a.article_id, a.code, a.name, c.name, v.name, ac.packing, a.packing
      HAVING SUM(sm.qty_pairs) <> 0`,
     params,
   );

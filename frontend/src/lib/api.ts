@@ -1655,12 +1655,18 @@ export interface StockMovementRow {
 export interface ProductLedgerRow extends StockMovementRow {
   debit: number;
   credit: number;
+  /** Which column the movement belongs in, by the document that made it (sale bill = OUT even when
+   *  an unpost puts pairs back; sale return = RETURN; stock voucher and the rest = IN). */
+  bucket: 'IN' | 'RETURN' | 'OUT';
+  /** The document that moved the stock: STOCK_VOUCHER, SALE_BILL, SALE_RETURN, their DRAFT_ forms, or null. */
+  source_type: string | null;
+  source_id: number | null;
   // Stock of this product+colour right after this movement (starting from its Opening).
   running_balance: number;
 }
 
-// One line per product+colour (client request, 2026-10-12): Opening = stock before date_from,
-// Balance = Opening + In - Out = stock on date_to.
+// One line per product+colour (client request, 2026-10-12; columns 2026-11-08): Opening = stock
+// before date_from, Total Stock = Opening + In + Return, Balance = Total Stock - Out = stock on date_to.
 export interface ProductLedgerProduct {
   variant_id: number;
   article_id: number;
@@ -1669,8 +1675,12 @@ export interface ProductLedgerProduct {
   color: string;
   category_name: string;
   vendor_name: string | null;
+  /** Pairs per carton for this colour (its own packing, else the article's). */
+  packing: number;
   opening: number;
   in: number;
+  returned: number;
+  total_stock: number;
   out: number;
   balance: number;
 }
@@ -1681,7 +1691,7 @@ export interface ProductLedgerResult {
   total_out: number;
   net: number;
   products: ProductLedgerProduct[];
-  product_totals: { opening: number; in: number; out: number; balance: number };
+  product_totals: { opening: number; in: number; returned: number; total_stock: number; out: number; balance: number };
 }
 
 export interface StockFilters {

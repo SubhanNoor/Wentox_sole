@@ -5,7 +5,8 @@ import { Search, X, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import * as api from '@/lib/api';
-import type { StockRow, VendorStockRow, ProductLedgerResult, StockMovementRow, StockMovementType, CategoryRow, VendorRow } from '@/lib/api';
+import type { StockRow, VendorStockRow, StockMovementRow, CategoryRow, VendorRow } from '@/lib/api';
+import ProductLedgerContent from '@/pages/ProductLedgerContent';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { closePreviewWindow } from '@/components/reports/previewWindow';
@@ -14,14 +15,6 @@ import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { getWindowParam, shouldAutoPreview, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
-
-const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
-  PRODUCTION: 'Production',
-  SALE: 'Sale',
-  SALE_RETURN: 'Sale Return',
-  OPENING: 'Opening',
-  ADJUSTMENT: 'Adjustment',
-};
 
 // Date range calculation helpers
 const getWeekRange = (dateStr: string) => {
@@ -78,7 +71,6 @@ export default function ReportStockPage() {
   // Real report data, fetched per-tab
   const [stockRows, setStockRows] = useState<StockRow[]>([]);
   const [vendorStockRows, setVendorStockRows] = useState<VendorStockRow[]>([]);
-  const [ledgerResult, setLedgerResult] = useState<ProductLedgerResult>({ rows: [], total_in: 0, total_out: 0, net: 0, products: [], product_totals: { opening: 0, in: 0, out: 0, balance: 0 } });
   const [productionRows, setProductionRows] = useState<StockMovementRow[]>([]);
   const [loading, setLoading] = useState(false);
   // Tabs whose data has arrived at least once: only their FIRST load shows "Loading…". A refresh
@@ -153,11 +145,6 @@ export default function ReportStockPage() {
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   // Current Stock and Material Stock show stock "as on" this date (per the user, 2026-10-15).
   const [asOfDate, setAsOfDate] = useState(() => getWindowParam('asOfDate') || getTodayDate());
-
-  // Product Ledger tab filtering state
-  const [ledgerFromDate, setLedgerFromDate] = useState(() => getWindowParam('ledgerFromDate') || getThreeMonthsAgoDate());
-  const [ledgerToDate, setLedgerToDate] = useState(() => getWindowParam('ledgerToDate') || getTodayDate());
-  const [ledgerVendorFilter, setLedgerVendorFilter] = useState(() => getWindowParam('ledgerVendorFilter') || 'all');
 
   const categoryIdParam = selectedCategory !== 'all' ? Number(selectedCategory) : undefined;
 
@@ -257,23 +244,6 @@ export default function ReportStockPage() {
     return rows;
   }, [vendorStockRows, materialVendorFilter, searchQuery]);
 
-  // ── Product Ledger ──
-  const loadLedger = useCallback(async () => {
-    setLoading(true);
-    const res = await api.reports.productLedger({
-      category_id: categoryIdParam,
-      vendor_id: ledgerVendorFilter !== 'all' ? Number(ledgerVendorFilter) : undefined,
-      search: searchQuery.trim() || undefined,
-      date_from: ledgerFromDate || undefined,
-      date_to: ledgerToDate || undefined,
-    });
-    if (res.ok) setLedgerResult(res.data); else fail(res.error.message);
-    setLoading(false);
-    markLoaded('ledger');
-  }, [categoryIdParam, ledgerVendorFilter, searchQuery, ledgerFromDate, ledgerToDate]);
-
-  useEffect(() => { if (activeStockTab === 'ledger') loadLedger(); }, [activeStockTab, loadLedger, dataVersion]);
-
   // ── Production (daily/weekly/monthly/overall) ──
   // The page's own week/month picker computes an explicit date_from/date_to — backend's `range`
   // param only covers "from today"/"from the 1st", not an arbitrary picked period.
@@ -330,10 +300,6 @@ export default function ReportStockPage() {
       const headers = ['Vendor', 'Material', 'Unit', 'Purchased', 'Returned', 'Current Stock'];
       const rows = materialStockRows.map(r => [r.vendor_name, r.material_name, r.unit, r.purchased_qty, r.returned_qty, r.on_hand]);
       exportRowsToExcel('material-stock', headers, rows);
-    } else if (activeStockTab === 'ledger') {
-      const headers = ['Date', 'Article', 'Color', 'Vendor', 'Type', 'Ref', 'Debit (IN)', 'Credit (OUT)', 'Balance'];
-      const rows = ledgerResult.rows.map(e => [e.movement_date, e.article_name, e.color, e.vendor_name || '', MOVEMENT_TYPE_LABEL[e.movement_type], e.movement_id, e.debit, e.credit, e.running_balance]);
-      exportRowsToExcel('product-ledger', headers, rows);
     } else {
       const headers = ['Date', 'Article Name', 'Color', 'Category', 'Packing', 'Qty Added', 'Unit', 'Total Pairs'];
       const rows = filteredLogs.map(log => [log.movement_date, log.article_name, log.color, log.category_name, log.packing ?? '', log.input_qty == null ? '' : formatCartons(log.input_qty), log.input_unit ?? '', log.qty_pairs]);
@@ -350,10 +316,6 @@ export default function ReportStockPage() {
     if (activeStockTab === 'current' || activeStockTab === 'material') params.asOfDate = asOfDate;
     if (activeStockTab === 'material') {
       params.materialVendorFilter = materialVendorFilter;
-    } else if (activeStockTab === 'ledger') {
-      params.ledgerFromDate = ledgerFromDate;
-      params.ledgerToDate = ledgerToDate;
-      params.ledgerVendorFilter = ledgerVendorFilter;
     } else if (activeStockTab === 'daily') {
       params.dailyDate = dailyDate;
     } else if (activeStockTab === 'weekly') {
@@ -384,7 +346,6 @@ export default function ReportStockPage() {
   const renderPrintableDocument = () => {
     let reportTitle = 'CURRENT FINISHED STOCK - FULL COLOR MATRIX REPORT';
     if (activeStockTab === 'material') reportTitle = 'RAW MATERIAL INVENTORY REPORT';
-    else if (activeStockTab === 'ledger') reportTitle = 'PRODUCT MOVEMENT LEDGER';
     else if (activeStockTab === 'daily') reportTitle = `DAILY PRODUCTION LOG (${formatDate(dailyDate)})`;
     else if (activeStockTab === 'weekly') reportTitle = 'WEEKLY PRODUCTION REPORT';
     else if (activeStockTab === 'monthly') reportTitle = `MONTHLY PRODUCTION REPORT (${getMonthName(monthlyMonth)} ${monthlyYear})`;
@@ -485,56 +446,6 @@ export default function ReportStockPage() {
                   </tr>
                 ))
               )}
-            </tbody>
-          </table>
-        )}
-
-        {/* Product Ledger Table */}
-        {activeStockTab === 'ledger' && (
-          <table className="excel-print-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
-            <thead>
-              <tr>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', width: '5%' }}>S#</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Date</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '18%' }}>Article</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Color</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '14%' }}>Vendor</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '10%' }}>Type</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '9%' }}>Ref</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '9%' }}>Debit (IN)</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '9%' }}>Credit (OUT)</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '9%' }}>Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ledgerResult.rows.length === 0 ? (
-                <tr>
-                  <td colSpan={10} style={{ border: '1px solid #000000', padding: '10px', fontSize: '11px', textAlign: 'center', color: '#666666' }}>
-                    No product ledger movements found matching your filters.
-                  </td>
-                </tr>
-              ) : (
-                ledgerResult.rows.map((e, idx) => (
-                  <tr key={e.movement_id}>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{idx + 1}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>{formatDate(e.movement_date)}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{e.article_name}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', color: REPORT_COLORS.muted }}>{e.color}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', color: REPORT_COLORS.muted }}>{e.vendor_name || '—'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10px', fontWeight: 'bold' }}>{MOVEMENT_TYPE_LABEL[e.movement_type]}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', fontFamily: 'monospace' }}>#{e.movement_id}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#047857' }}>{e.debit > 0 ? e.debit : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: '#e11d48' }}>{e.credit > 0 ? `(${e.credit})` : '-'}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: e.running_balance < 0 ? '#e11d48' : '#111111' }}>{e.running_balance < 0 ? `(${Math.abs(e.running_balance).toLocaleString()})` : e.running_balance.toLocaleString()}</td>
-                  </tr>
-                ))
-              )}
-              <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
-                <td colSpan={8} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{ledgerResult.total_in.toLocaleString()}</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({ledgerResult.total_out.toLocaleString()})</td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline' }} title="Total stock of the listed products on the To date">{ledgerResult.product_totals.balance < 0 ? `(${Math.abs(ledgerResult.product_totals.balance).toLocaleString()})` : ledgerResult.product_totals.balance.toLocaleString()}</td>
-              </tr>
             </tbody>
           </table>
         )}
@@ -695,6 +606,11 @@ export default function ReportStockPage() {
 
   return (
     <AppLayout pageTitle="Stock & Production Center" headerAction={tabBar}>
+      {/* Product Ledger is the Reports one, filters, print preview and all (per the user 2026-11-08):
+          one report in both places instead of two that drift apart. */}
+      {activeStockTab === 'ledger' ? (
+        <ProductLedgerContent />
+      ) : (
       <div className="mx-auto" style={{ maxWidth: 1000 }}>
 
         {successMsg && <div className="banner-success rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{successMsg}</div>}
@@ -773,44 +689,6 @@ export default function ReportStockPage() {
                     </div>
                   </div>
                 )}
-                {activeStockTab === 'ledger' && (
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-slate-500 uppercase">From Date:</label>
-                      <input
-                        type="date"
-                        value={ledgerFromDate}
-                        onChange={e => setLedgerFromDate(e.target.value)}
-                        className="soleria-input py-1.5 px-3 text-sm font-semibold"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-slate-500 uppercase">To Date:</label>
-                      <input
-                        type="date"
-                        value={ledgerToDate}
-                        onChange={e => setLedgerToDate(e.target.value)}
-                        className="soleria-input py-1.5 px-3 text-sm font-semibold"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-slate-500 uppercase">Vendor:</label>
-                      <div className="w-48">
-                        <SearchableSelect
-                          options={[
-                            { value: 'all', label: 'All Vendors' },
-                            ...vendors.map(v => ({ value: String(v.vendor_id), label: v.name }))
-                          ]}
-                          value={ledgerVendorFilter}
-                          onChange={setLedgerVendorFilter}
-                          placeholder="All Vendors"
-                          searchPlaceholder="Filter vendor..."
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {activeStockTab === 'daily' && (
                   <div className="flex items-center gap-2">
                     <label className="text-xs font-semibold text-slate-500 uppercase">Production Date:</label>
@@ -983,6 +861,7 @@ export default function ReportStockPage() {
         </div>
 
       </div>
+      )}
 
       {/* Material Stock Adjustment Modal (deduct/reduce only — stock:reduce-vendor-stock is the
           only real backend operation, the demo's Add direction had no backend equivalent). */}
