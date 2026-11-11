@@ -29,6 +29,12 @@ module.exports = function register() {
     return service.create(payload, session.userId);
   }));
 
+  // The whole voucher — header and every line — saved together in one transaction (Save/Done).
+  ipcMain.handle('receipt-vouchers:saveWithLines', wrap((payload) => {
+    const session = requireSession();
+    return service.saveWithLines(payload, session.userId, session);
+  }));
+
   // Header only (date/remarks). Blocked once anything on the voucher is posted.
   ipcMain.handle('receipt-vouchers:update', wrap((payload) => {
     const session = requireSession();

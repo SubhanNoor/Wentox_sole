@@ -45,6 +45,8 @@ function raiseChildren() {
     // Raising a minimized window must not bring it back — only the user restores it.
     if (w.isVisible() && !w.isMinimized()) w.moveTop();
   }
+  // An open MenuBar dropdown stays above the children it was just shown over.
+  if (menuPopup && !menuPopup.isDestroyed() && menuPopup.isVisible()) menuPopup.moveTop();
 }
 
 let syncScheduled = false;
@@ -55,11 +57,118 @@ function scheduleOnTopSync() {
   setImmediate(() => {
     syncScheduled = false;
     const appActive = isAppActive();
+    // Switching to another app with a dropdown open must not leave it floating over that app.
+    if (!appActive) hideMenuPopup(mainWindow);
     if (appActive === childrenOnTop) return;
     childrenOnTop = appActive;
     if (appActive) raiseChildren();
     else for (const w of childWindows) { if (!w.isDestroyed()) w.setAlwaysOnTop(false); }
   });
+}
+
+// The main window's MenuBar dropdown, shown in a window of its own (per the user, 2026-11-11). Drawn
+// inside the main window's page it could never appear above the floating child windows — a page
+// can't paint over another window — so it sat hidden behind any open screen. As its own topmost
+// window it shows above them while they stay visible and untouched.
+//
+// One window, created hidden right after the main window and reused for every dropdown, so opening a
+// menu never waits for a window to be built. It is never focusable: the main window keeps the
+// keyboard (Escape still closes the menu) and focus never moves, so the focus-driven stacking above
+// (scheduleOnTopSync) is not disturbed by using the menu. What it shows is driven by the main
+// window's renderer directly over a BroadcastChannel (frontend/src/lib/menuPopup.ts); this side only
+// places, sizes, shows and hides it.
+let menuPopup = null;
+// Bumped by every place/hide. The popup echoes the value it rendered for, so a late "ready to show"
+// from a menu the pointer has already left is dropped instead of flashing the old menu back up.
+let menuPopupSeq = 0;
+// Where the dropdown's top-left goes, in screen DIPs, and the main window's zoom when placed.
+let menuPopupAnchor = null;
+// Quitting closes every window — the popup must not be rebuilt then.
+let quitting = false;
+app.on('before-quit', () => { quitting = true; });
+
+function ensureMenuPopup() {
+  if (menuPopup && !menuPopup.isDestroyed()) return menuPopup;
+  const popup = new BrowserWindow({
+    width: 300,
+    height: 100,
+    show: false,
+    frame: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    focusable: false,
+    alwaysOnTop: true,
+    // Same cream as the dropdown itself, so nothing else ever shows through while it paints.
+    backgroundColor: '#fdfbf4',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  // The highest band — above the children's own always-on-top.
+  popup.setAlwaysOnTop(true, 'pop-up-menu');
+  loadApp(popup, { menuPopup: '1' });
+  // Kept alive while the main window is: a crashed page reloads, a closed window is rebuilt.
+  popup.webContents.on('render-process-gone', () => {
+    if (!popup.isDestroyed()) { popup.hide(); loadApp(popup, { menuPopup: '1' }); }
+  });
+  popup.on('closed', () => {
+    if (menuPopup === popup) menuPopup = null;
+    if (quitting) return;
+    setImmediate(() => {
+      if (!quitting && mainWindow && !mainWindow.isDestroyed()) ensureMenuPopup();
+    });
+  });
+  menuPopup = popup;
+  return popup;
+}
+
+// Main window only: the dropdown's top-left in the main window's CSS pixels. Returns the sequence
+// number the popup must echo back in showMenuPopup.
+function placeMenuPopup(win, x, y) {
+  if (win !== mainWindow || win.isDestroyed()) return null;
+  const popup = ensureMenuPopup();
+  const zoom = win.webContents.getZoomFactor();
+  const content = win.getContentBounds();
+  menuPopupSeq += 1;
+  menuPopupAnchor = {
+    x: content.x + Math.round((Number(x) || 0) * zoom),
+    y: content.y + Math.round((Number(y) || 0) * zoom),
+    zoom,
+  };
+  // The dropdown is drawn at the main window's own zoom, so it reads exactly as before.
+  if (popup.webContents.getZoomFactor() !== zoom) popup.webContents.setZoomFactor(zoom);
+  return menuPopupSeq;
+}
+
+// Popup only: it has rendered the menu for `seq` and measured it (CSS pixels) — size it and show it.
+function showMenuPopup(win, seq, width, height) {
+  if (!menuPopup || win !== menuPopup || menuPopup.isDestroyed()) return false;
+  if (seq !== menuPopupSeq || !menuPopupAnchor) return false;
+  const { zoom } = menuPopupAnchor;
+  const w = Math.max(1, Math.ceil((Number(width) || 0) * zoom));
+  const h = Math.max(1, Math.ceil((Number(height) || 0) * zoom));
+  // Kept on the screen: a menu near the right edge shifts left rather than running off it.
+  const work = screen.getDisplayNearestPoint({ x: menuPopupAnchor.x, y: menuPopupAnchor.y }).workArea;
+  const x = Math.max(work.x, Math.min(menuPopupAnchor.x, work.x + work.width - w));
+  const y = Math.max(work.y, Math.min(menuPopupAnchor.y, work.y + work.height - h));
+  menuPopup.setBounds({ x, y, width: w, height: h });
+  if (!menuPopup.isVisible()) menuPopup.showInactive();
+  menuPopup.moveTop();
+  return true;
+}
+
+function hideMenuPopup(win) {
+  if (win !== mainWindow) return false;
+  menuPopupSeq += 1;
+  menuPopupAnchor = null;
+  if (menuPopup && !menuPopup.isDestroyed() && menuPopup.isVisible()) menuPopup.hide();
+  return true;
 }
 
 // A newly opened child has to come up on top of every other child. It can't rely on gaining focus
@@ -230,14 +339,26 @@ function createAppWindow(page, tab, { child = false, params = {}, opener = null 
     win.on('closed', () => {
       for (const w of childWindows) { if (!w.isDestroyed()) w.close(); }
       childWindows.clear();
+      if (menuPopup && !menuPopup.isDestroyed()) menuPopup.destroy();
     });
+    // Built the moment the app opens and kept running for as long as it is open (per the user,
+    // 2026-11-11), so no menu ever waits for its window — see ensureMenuPopup's keep-alive.
+    ensureMenuPopup();
+    // The dropdown is pinned to a spot on the main window — anything that moves or hides that window
+    // takes it down rather than leaving it floating in the wrong place.
+    for (const evt of ['move', 'resize', 'minimize', 'hide']) win.on(evt, () => hideMenuPopup(win));
   }
 
   const query = { ...params };
   if (page) query.page = page;
   if (tab) query.tab = tab;
   if (child) query.child = '1';
+  loadApp(win, query);
+  return win;
+}
 
+// Shared by every app window and the menu popup: dev server, packaged, or unpackaged-prod build.
+function loadApp(win, query) {
   if (process.env.VITE_DEV_SERVER_URL) {
     // dev: Vite server — loadFile's `query` option only applies to loadFile, so build the URL by hand.
     const url = new URL(process.env.VITE_DEV_SERVER_URL);
@@ -252,8 +373,6 @@ function createAppWindow(page, tab, { child = false, params = {}, opener = null 
     // unpackaged prod: `npm start` against a local frontend build
     win.loadFile(path.join(__dirname, '../../frontend/dist/index.html'), { query });
   }
-
-  return win;
 }
 
 // The main window's "Open Windows" list (frontend/src/components/OpenWindowsMenu.tsx). A child's
@@ -289,4 +408,7 @@ function closeChildAndFocusMain(win) {
   return true;
 }
 
-module.exports = { createAppWindow, openChildWindow, setQuickMenuBottom, closeChildAndFocusMain, listChildWindows, focusChildWindow };
+module.exports = {
+  createAppWindow, openChildWindow, setQuickMenuBottom, closeChildAndFocusMain, listChildWindows, focusChildWindow,
+  placeMenuPopup, showMenuPopup, hideMenuPopup,
+};

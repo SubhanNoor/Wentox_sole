@@ -234,10 +234,95 @@ async function remove(voucherId, userId) {
   });
 }
 
+// Saves a whole voucher — header and every line — in ONE transaction (per the user, 2026-11-11:
+// the Payments screen now works like the Journal Voucher one; Enter only adds a line on screen and
+// Save/Done writes them all together, so a voucher is never left half-saved).
+//
+// payload: { voucher_id?, voucher_date, remarks, lines: [...] } — each line is a draft expense's
+// fields (draft_id when it already exists). `unchanged: true` on an existing line means "keep it
+// as it is". An existing line left out of `lines` is deleted.
+//
+// Only while the voucher is entirely UNPOSTED, the same rule as update()/remove(). A line stuck
+// from an earlier failed post (pending_expense_id) may be kept, but not changed or deleted — the
+// same guard draftExpenses.update()/remove() apply to it.
+async function saveWithLines(payload, userId, session) {
+  validateHeader(payload);
+  const lines = Array.isArray(payload.lines) ? payload.lines : [];
+  if (lines.length === 0) throw ApiError.badRequest('Add at least one entry before saving', 'EMPTY_VOUCHER');
+
+  let existing = null;
+  if (payload.voucher_id) {
+    existing = await getById(payload.voucher_id);
+    if (existing.status !== 'UNPOSTED') {
+      throw ApiError.conflict('Unpost this voucher before changing it', 'POSTED_LOCK');
+    }
+  }
+  const existingDrafts = new Set((existing?.lines ?? []).filter((l) => l.draft_id != null).map((l) => l.draft_id));
+
+  const assertNotStuck = async (draftId) => {
+    const draft = await draftExpensesRepository.findById(draftId);
+    if (draft && draft.pending_expense_id) {
+      throw ApiError.conflict(
+        `this entry has a stuck expense (#${draft.pending_expense_id}) from an earlier post attempt — resolve it before changing or removing the entry`,
+        'PENDING_EXPENSE_UNRESOLVED',
+      );
+    }
+  };
+
+  // Validate every line before writing anything, with the same rules a single line always had.
+  const date = payload.voucher_date;
+  const kept = new Set();
+  const prepared = [];
+  for (const [index, line] of lines.entries()) {
+    try {
+      const id = line.draft_id ?? null;
+      if (id != null && !existingDrafts.has(id)) throw ApiError.badRequest('this entry is not on this voucher');
+      if (id != null) kept.add(id);
+      if (id != null && line.unchanged) continue;
+      if (id != null) await assertNotStuck(id);
+      const body = { ...line, expense_date: date };
+      draftExpensesService.validateHeader(body);
+      const baId = await draftExpensesService.resolveTarget(body, session);
+      prepared.push({ id, fields: draftExpensesService.buildFields(body, baId) });
+    } catch (err) {
+      if (err instanceof ApiError) err.message = `Entry ${index + 1}: ${err.message}`;
+      throw err;
+    }
+  }
+  for (const draftId of existingDrafts) {
+    if (!kept.has(draftId)) await assertNotStuck(draftId);
+  }
+
+  const voucherId = await withTransaction(async (transaction) => {
+    let id = existing?.voucher_id;
+    if (id == null) {
+      const voucherNo = await repository.nextVoucherNo(transaction);
+      id = await repository.insert(transaction, {
+        voucher_no: voucherNo, voucher_date: date, remarks: payload.remarks, created_by: userId,
+      });
+    } else {
+      await repository.updateHeader(transaction, id, { voucher_date: date, remarks: payload.remarks, updated_by: userId });
+      await draftExpensesRepository.syncVoucherLineDates(transaction, id, date);
+    }
+    // Lines taken off the voucher on screen.
+    for (const draftId of existingDrafts) {
+      if (!kept.has(draftId)) await draftExpensesRepository.deleteDraft(transaction, draftId);
+    }
+    // Changed and new lines, in screen order — a new line's place in the voucher is its insert order.
+    for (const line of prepared) {
+      if (line.id != null) await draftExpensesRepository.updateHeader(transaction, line.id, line.fields);
+      else await draftExpensesRepository.insert(transaction, { ...line.fields, voucher_id: id, created_by: userId });
+    }
+    return id;
+  });
+
+  return getById(voucherId);
+}
+
 function listDeletedNumbers() {
   return deletedNumbersRepository.listByType('EXPENSE_VOUCHER');
 }
 
 module.exports = {
-  list, getById, create, update, post, unpost, remove, deriveStatus, listDeletedNumbers,
+  list, getById, create, update, saveWithLines, post, unpost, remove, deriveStatus, listDeletedNumbers,
 };

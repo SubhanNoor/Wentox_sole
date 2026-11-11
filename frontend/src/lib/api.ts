@@ -1055,6 +1055,27 @@ export interface ReceiptVoucherLineRow extends Omit<ReceiptRow, 'receipt_id'> {
   endorse_to_code?: string | null;
 }
 
+/** A whole receipt voucher saved at once (receipt-vouchers:saveWithLines, 2026-11-11). An existing
+ *  line carries its draft_id/settlement_id; `unchanged` keeps it as it is; one left out is deleted. */
+export interface ReceiptVoucherSaveInput {
+  voucher_id?: number | null;
+  voucher_date: string;
+  remarks?: string;
+  allow_duplicate_cheque?: boolean;
+  lines: (
+    | ({ kind: 'RECEIPT'; draft_id?: number | null; unchanged?: boolean } & Omit<ReceiptCreateInput, 'receipt_date'>)
+    | ({ kind: 'SETTLEMENT'; settlement_id?: number | null; unchanged?: boolean } & Omit<SettlementCreateInput, 'settlement_date'>)
+  )[];
+}
+
+/** A whole payment voucher saved at once (expense-vouchers:saveWithLines, 2026-11-11). */
+export interface ExpenseVoucherSaveInput {
+  voucher_id?: number | null;
+  voucher_date: string;
+  remarks?: string;
+  lines: ({ draft_id?: number | null; unchanged?: boolean } & Omit<ExpenseCreateInput, 'expense_date'>)[];
+}
+
 /** PN-01: one line of an expense voucher — same two-table union as ReceiptVoucherLineRow. */
 export interface ExpenseVoucherLineRow extends Omit<ExpenseRow, 'expense_id'> {
   expense_id: number | null;
@@ -2028,6 +2049,9 @@ declare global {
         list: () => Promise<ApiResult<OpenWindowRow[]>>;
         focus: (payload: { id: number }) => Promise<ApiResult<{ focused: boolean }>>;
         setQuickMenuBottom: (payload: { bottom: number }) => Promise<ApiResult<{ accepted: boolean }>>;
+        placeMenuPopup: (payload: { x: number; y: number }) => Promise<ApiResult<{ seq: number | null }>>;
+        showMenuPopup: (payload: { seq: number; width: number; height: number }) => Promise<ApiResult<{ shown: boolean }>>;
+        hideMenuPopup: () => Promise<ApiResult<{ hidden: boolean }>>;
       };
       systemReset: {
         run: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
@@ -2279,6 +2303,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<ReceiptVoucherRow>>;
         create: (payload: { voucher_date: string; remarks?: string }) => Promise<ApiResult<ReceiptVoucherRow>>;
         update: (payload: { id: number; voucher_date: string; remarks?: string }) => Promise<ApiResult<ReceiptVoucherRow>>;
+        saveWithLines: (payload: ReceiptVoucherSaveInput) => Promise<ApiResult<ReceiptVoucherRow>>;
         post: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'receipt_id', ReceiptVoucherRow>>>;
         unpost: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'receipt_id', ReceiptVoucherRow>>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
@@ -2361,6 +2386,7 @@ declare global {
         get: (payload: { id: number }) => Promise<ApiResult<ExpenseVoucherRow>>;
         create: (payload: { voucher_date: string; remarks?: string }) => Promise<ApiResult<ExpenseVoucherRow>>;
         update: (payload: { id: number; voucher_date: string; remarks?: string }) => Promise<ApiResult<ExpenseVoucherRow>>;
+        saveWithLines: (payload: ExpenseVoucherSaveInput) => Promise<ApiResult<ExpenseVoucherRow>>;
         post: (payload: { id: number }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
         unpost: (payload: { id: number; reverse_endorsement?: boolean }) => Promise<ApiResult<VoucherActionResult<'expense_id', ExpenseVoucherRow>>>;
         remove: (payload: { id: number; password: string }) => Promise<ApiResult<{ ok: true }>>;
@@ -2625,6 +2651,23 @@ export async function focusOpenWindow(id: number): Promise<ApiResult<{ focused: 
 export async function reportQuickMenuBottom(bottom: number): Promise<ApiResult<{ accepted: boolean }>> {
   if (!window.api) return NO_BRIDGE;
   return window.api.windows.setQuickMenuBottom({ bottom });
+}
+
+// The MenuBar dropdown's own window (lib/menuPopup.ts, backend windowManager.js#ensureMenuPopup).
+// place/hide are called by the main window; show by the popup once it has drawn the menu.
+export async function placeMenuPopup(x: number, y: number): Promise<ApiResult<{ seq: number | null }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.windows.placeMenuPopup({ x, y });
+}
+
+export async function showMenuPopup(seq: number, width: number, height: number): Promise<ApiResult<{ shown: boolean }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.windows.showMenuPopup({ seq, width, height });
+}
+
+export async function hideMenuPopup(): Promise<ApiResult<{ hidden: boolean }>> {
+  if (!window.api) return NO_BRIDGE;
+  return window.api.windows.hideMenuPopup();
 }
 
 export async function updateCredentials(payload: { currentPassword: string; username?: string; newPassword?: string }): Promise<ApiResult<{ username: string }>> {
@@ -3325,6 +3368,9 @@ export const receiptVouchers = {
     window.api ? window.api.receiptVouchers.create(payload).then(r => mapResult(r, normalizeVoucher)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: { voucher_date: string; remarks?: string }) =>
     window.api ? window.api.receiptVouchers.update({ id, ...payload }).then(r => mapResult(r, normalizeVoucher)) : Promise.resolve(NO_BRIDGE),
+  // The whole voucher — header and every line — in one transaction (Save/Done).
+  saveWithLines: (payload: ReceiptVoucherSaveInput) =>
+    window.api ? window.api.receiptVouchers.saveWithLines(payload).then(r => mapResult(r, normalizeVoucher)) : Promise.resolve(NO_BRIDGE),
   // Resolving ok does NOT mean every line posted — read `data.failed`.
   post: (id: number) =>
     window.api ? window.api.receiptVouchers.post({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
@@ -3537,6 +3583,9 @@ export const expenseVouchers = {
     window.api ? window.api.expenseVouchers.create(payload).then(r => mapResult(r, normalizeExpenseVoucher)) : Promise.resolve(NO_BRIDGE),
   update: (id: number, payload: { voucher_date: string; remarks?: string }) =>
     window.api ? window.api.expenseVouchers.update({ id, ...payload }).then(r => mapResult(r, normalizeExpenseVoucher)) : Promise.resolve(NO_BRIDGE),
+  // The whole voucher — header and every line — in one transaction (Save/Done).
+  saveWithLines: (payload: ExpenseVoucherSaveInput) =>
+    window.api ? window.api.expenseVouchers.saveWithLines(payload).then(r => mapResult(r, normalizeExpenseVoucher)) : Promise.resolve(NO_BRIDGE),
   post: (id: number) =>
     window.api ? window.api.expenseVouchers.post({ id }).then(r => mapResult(r, d => ({ ...d, voucher: normalizeExpenseVoucher(d.voucher) }))) : Promise.resolve(NO_BRIDGE),
   // reverseEndorsement: a CHEQUE_ENDORSED line refuses to unpost on its own, because its money

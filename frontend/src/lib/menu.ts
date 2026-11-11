@@ -138,3 +138,21 @@ export const MENU_GROUPS: MenuGroup[] = [
     ],
   },
 ];
+
+// A group's items as one user sees them: adminOnly ones hidden for a 'User', and separators that
+// ended up leading, trailing, or doubled after that filter dropped — otherwise hiding an admin-only
+// item can leave a stray rule floating at the bottom of the menu.
+export function visibleMenuItems(group: MenuGroup, isAdmin: boolean): (MenuItem | null)[] {
+  const items = isAdmin ? group.items : group.items.filter(i => !i?.adminOnly);
+  const out: (MenuItem | null)[] = [];
+  for (const item of items) {
+    if (item === null) {
+      if (out.length === 0 || out[out.length - 1] === null) continue;
+      out.push(null);
+    } else {
+      out.push(item);
+    }
+  }
+  while (out.length && out[out.length - 1] === null) out.pop();
+  return out;
+}

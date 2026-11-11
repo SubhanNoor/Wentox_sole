@@ -24,7 +24,7 @@ async function geometry(app, win) {
   });
   return app.evaluate(({ BrowserWindow, screen }, bottom) => {
     const all = BrowserWindow.getAllWindows();
-    const main = all.find((w) => !w.webContents.getURL().includes('child=1'));
+    const main = all.find((w) => !w.webContents.getURL().includes('child=1') && !w.webContents.getURL().includes('menuPopup=1'));
     const work = screen.getDisplayMatching(main.getBounds()).workArea;
     return {
       work,
@@ -38,7 +38,7 @@ test('the main window opens maximized', async (t) => {
   const { app, win, close } = await h.launchApp();
   t.after(close);
   await h.login(win);
-  const maximized = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized());
+  const maximized = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('child=1') && !w.webContents.getURL().includes('menuPopup=1')).isMaximized());
   assert.equal(maximized, true);
 });
 
@@ -49,7 +49,7 @@ for (const zoom of [1, 0.75]) {
     await h.login(win);
     // The main window fills the screen like a shop PC's, so the bar sits at the top of the work area.
     await app.evaluate(({ BrowserWindow }, factor) => {
-      const main = BrowserWindow.getAllWindows()[0];
+      const main = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('child=1') && !w.webContents.getURL().includes('menuPopup=1'));
       main.maximize();
       main.webContents.setZoomFactor(factor);
     }, zoom);

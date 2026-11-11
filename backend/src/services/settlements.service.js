@@ -165,4 +165,5 @@ async function unpost(settlementId, userId, session) {
   return getById(settlementId);
 }
 
-module.exports = { list, getById, create, update, remove, post, unpost };
+// validate/buildFields are also used by receiptVouchers.service.js#saveWithLines.
+module.exports = { list, getById, create, update, remove, post, unpost, validate, buildFields };

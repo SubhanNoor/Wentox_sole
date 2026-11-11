@@ -1,6 +1,7 @@
-# UI/UX Frontend Design System Guidelines
+****# UI/UX Frontend Design System Guidelines
 
 ## 1. Card Components Standard
+
 All summary cards (e.g. Weekly Records, Monthly Records, Overall Records, Customer Cards, Setup Summary Cards) across the application must strictly adhere to the following design specifications:
 
 - **Container Layout**: Roomy & spacious container max-width (`style={{ maxWidth: 1400 }}`).
@@ -22,6 +23,7 @@ All summary cards (e.g. Weekly Records, Monthly Records, Overall Records, Custom
 ---
 
 ## 2. Dropdown & Select Control Standard
+
 All filter dropdowns (e.g. Month Filter, Year Select, Category Select, Status Filter) must use custom popover dropdown styling matching the site design:
 
 - **Button Trigger**:
@@ -46,6 +48,7 @@ All filter dropdowns (e.g. Month Filter, Year Select, Category Select, Status Fi
 ---
 
 ## 3. Filter Toolbar & Top Bar Layout Standard
+
 - Outer toolbar container spans full width (`w-full` inside `maxWidth: 1400`).
 - Left Side: Search input (`max-w-md`).
 - Right Side: Custom Popover Dropdowns + Record Count badge (`flex items-center gap-3`).
@@ -53,13 +56,16 @@ All filter dropdowns (e.g. Month Filter, Year Select, Category Select, Status Fi
 ---
 
 ## 4. Table Action Buttons Standard (Edit & Print Icons)
+
 All data tables rendering row-level actions must use standard compact icon action buttons:
+
 - Edit Button (`Edit2` icon): `p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-[var(--brand-navy)] transition-colors cursor-pointer`
 - Print Button (`Printer` icon): `p-1.5 rounded-lg hover:bg-amber-50 text-slate-500 hover:text-[var(--brand-gold)] transition-colors cursor-pointer`
 
 ---
 
 ## 5. Customer Detail View & Animation Standard
+
 - Entrance animation: `animate-in fade-in slide-in-from-bottom-3 duration-300`.
 - Exit animation: Managed via `isClosing` state + 200ms timeout (`opacity-0 translate-y-2 scale-98`).
 - Layout: Round `ArrowLeft` button, title in `font-lora font-bold text-xl text-slate-900`, styled pill-box `Back to Customers` button (`bg-amber-50/80 hover:bg-amber-100/90 text-amber-900 border border-amber-200/80 rounded-xl`), and standardized table headers (`Date`, `Sys ID`, `Bill No.`, `Sub-Customer`, `Cartons`, `Pairs`, `Bilty No. / Adda`, `Invoice Value`, `Actions`).
@@ -67,7 +73,9 @@ All data tables rendering row-level actions must use standard compact icon actio
 ---
 
 ## 6. Predefined Quick Filter Pills Standard
+
 All predefined category/status quick filter pill groups (e.g. Overall Trail category pills, Sale Bills Find & Update quick filters, Reports Hub tab pills) must use the following standard styling:
+
 - **Active Pill State**: `bg-[#111c2a] text-[#B08D57] shadow-sm font-bold` (dark navy box with brand gold text accent).
 - **Inactive Pill State**: `bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200` (clean subtle light gray pill with hover highlight).
 - **Container Layout**: Flex container with gap spacing (`flex flex-wrap items-center gap-1.5`).

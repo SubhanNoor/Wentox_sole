@@ -29,7 +29,7 @@ test('opening a screen that is already open brings its window forward instead of
   const saleBill = children[0];
 
   // Same screen again, from the main window: still one window, and it is the focused one.
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('child=1')).focus());
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('child=1') && !w.webContents.getURL().includes('menuPopup=1')).focus());
   await h.quickMenu(win, 'Sale Bill').click();
   children = await childWindows(app);
   assert.equal(children.length, 1, 'no duplicate Sale Bill window');

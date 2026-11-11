@@ -55,7 +55,11 @@ async function launchApp() {
     }).observe(document, { childList: true, subtree: true });
   });
 
-  const win = await app.firstWindow();
+  // The main window — not the MenuBar dropdown's own window, which opens alongside it.
+  let win = await app.firstWindow();
+  while (win.url().includes('menuPopup=1')) {
+    win = app.windows().find((w) => !w.url().includes('menuPopup=1')) || (await app.waitForEvent('window'));
+  }
   return {
     app,
     win,
@@ -87,9 +91,18 @@ async function login(win) {
 }
 
 // A top menu item (lib/menu.ts) — the group opens on hover (MenuBar.tsx; a click only toggles it).
+// The dropdown is drawn in a window of its own (backend windowManager.js#ensureMenuPopup), so the
+// item is found there, not in the main window.
 async function menuItem(win, group, label) {
   await win.getByText(group, { exact: true }).hover();
-  const item = win.getByText(label, { exact: true });
+  const app = win.context();
+  let popup;
+  for (let i = 0; i < 100 && !popup; i++) {
+    popup = app.pages().find((p) => p.url().includes('menuPopup=1'));
+    if (!popup) await win.waitForTimeout(100);
+  }
+  if (!popup) throw new Error('menu popup window not found');
+  const item = popup.getByText(label, { exact: true });
   await item.waitFor();
   return item;
 }

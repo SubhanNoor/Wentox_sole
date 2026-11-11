@@ -16,7 +16,8 @@ function windowState(app) {
     // windowManager.js defers its on-top sync by one tick after a focus change — let it run.
     await new Promise((resolve) => setTimeout(resolve, 150));
     const focused = BrowserWindow.getFocusedWindow();
-    return BrowserWindow.getAllWindows().map((w) => ({
+    // The MenuBar dropdown's own window (windowManager.js#ensureMenuPopup) is not an app window.
+    return BrowserWindow.getAllWindows().filter((w) => !w.webContents.getURL().includes('menuPopup=1')).map((w) => ({
       id: w.id,
       title: w.getTitle(),
       onTop: w.isAlwaysOnTop(),

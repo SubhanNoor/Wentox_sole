@@ -224,4 +224,5 @@ async function confirm(draftId, userId, session) {
   return posted;
 }
 
-module.exports = { create, getById, list, update, remove, confirm };
+// validateHeader/buildFields/resolveTarget are also used by expenseVouchers.service.js#saveWithLines.
+module.exports = { create, getById, list, update, remove, confirm, validateHeader, buildFields, resolveTarget };

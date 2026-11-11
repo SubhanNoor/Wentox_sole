@@ -2,7 +2,10 @@
 // (there's nothing to query; this only calls into Electron's own BrowserWindow via windowManager).
 const { ipcMain } = require('electron');
 const { BrowserWindow } = require('electron');
-const { openChildWindow, setQuickMenuBottom, closeChildAndFocusMain, listChildWindows, focusChildWindow } = require('../../electron/windowManager');
+const {
+  openChildWindow, setQuickMenuBottom, closeChildAndFocusMain, listChildWindows, focusChildWindow,
+  placeMenuPopup, showMenuPopup, hideMenuPopup,
+} = require('../../electron/windowManager');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
 
@@ -33,6 +36,23 @@ module.exports = function register() {
   ipcMain.handle('windows:setQuickMenuBottom', wrap((payload, event) => {
     requireSession();
     return { accepted: setQuickMenuBottom(BrowserWindow.fromWebContents(event.sender), payload?.bottom) };
+  }));
+
+  // The MenuBar dropdown's own window (windowManager.js#ensureMenuPopup). No session check — like
+  // zoom, it only moves a window around and touches no data. Each call is ignored unless it comes
+  // from the window it belongs to: place/hide from the main window, show from the popup itself.
+  ipcMain.handle('windows:placeMenuPopup', wrap((payload, event) => {
+    return { seq: placeMenuPopup(BrowserWindow.fromWebContents(event.sender), payload?.x, payload?.y) };
+  }));
+
+  ipcMain.handle('windows:showMenuPopup', wrap((payload, event) => {
+    return {
+      shown: showMenuPopup(BrowserWindow.fromWebContents(event.sender), payload?.seq, payload?.width, payload?.height),
+    };
+  }));
+
+  ipcMain.handle('windows:hideMenuPopup', wrap((_payload, event) => {
+    return { hidden: hideMenuPopup(BrowserWindow.fromWebContents(event.sender)) };
   }));
 
   // The main window's "Open Windows" list: every open child window, and bringing one forward.

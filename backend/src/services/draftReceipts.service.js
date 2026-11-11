@@ -161,4 +161,5 @@ async function confirm(draftId, userId, session) {
   return receiptsService.getById(receiptId);
 }
 
-module.exports = { create, getById, list, update, remove, confirm };
+// validateHeader/buildFields are also used by receiptVouchers.service.js#saveWithLines.
+module.exports = { create, getById, list, update, remove, confirm, validateHeader, buildFields };

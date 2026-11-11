@@ -30,6 +30,12 @@ module.exports = function register() {
   }));
 
   // Header only (date/remarks). Blocked once anything on the voucher is posted.
+  // The whole voucher — header and every line — saved together in one transaction (Save/Done).
+  ipcMain.handle('expense-vouchers:saveWithLines', wrap((payload) => {
+    const session = requireSession();
+    return service.saveWithLines(payload, session.userId, session);
+  }));
+
   ipcMain.handle('expense-vouchers:update', wrap((payload) => {
     const session = requireSession();
     return service.update(payload.id, payload, session.userId);

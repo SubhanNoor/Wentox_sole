@@ -91,32 +91,34 @@ async function insert(transaction, settlement) {
   return result.recordset[0].settlement_id;
 }
 
-async function update(settlementId, settlement) {
-  await query(
-    `UPDATE dbo.settlements SET
+// `transaction` is optional: a receipt voucher saved whole (receiptVouchers.service.js#saveWithLines)
+// edits its endorsed lines inside its own transaction; everything else runs standalone.
+async function update(settlementId, settlement, transaction = null) {
+  const text = `UPDATE dbo.settlements SET
        settlement_date = @settlementDate, from_ba_id = @fromBaId, to_ba_id = @toBaId,
        amount = @amount, payment_mode = @paymentMode, cheque_no = @chequeNo,
        cheque_date = @chequeDate, remarks = @remarks
-     WHERE settlement_id = @settlementId`,
-    {
-      settlementId: { type: sql.Int, value: settlementId },
-      settlementDate: { type: sql.Date, value: settlement.settlement_date },
-      fromBaId: { type: sql.Int, value: settlement.from_ba_id },
-      toBaId: { type: sql.Int, value: settlement.to_ba_id },
-      amount: { type: sql.Decimal(14, 2), value: settlement.amount },
-      paymentMode: { type: sql.VarChar(10), value: settlement.payment_mode ?? null },
-      chequeNo: { type: sql.VarChar(50), value: settlement.cheque_no ?? null },
-      chequeDate: { type: sql.Date, value: settlement.cheque_date ?? null },
-      remarks: { type: sql.NVarChar(500), value: settlement.remarks ?? null },
-    },
-  );
+     WHERE settlement_id = @settlementId`;
+  const params = {
+    settlementId: { type: sql.Int, value: settlementId },
+    settlementDate: { type: sql.Date, value: settlement.settlement_date },
+    fromBaId: { type: sql.Int, value: settlement.from_ba_id },
+    toBaId: { type: sql.Int, value: settlement.to_ba_id },
+    amount: { type: sql.Decimal(14, 2), value: settlement.amount },
+    paymentMode: { type: sql.VarChar(10), value: settlement.payment_mode ?? null },
+    chequeNo: { type: sql.VarChar(50), value: settlement.cheque_no ?? null },
+    chequeDate: { type: sql.Date, value: settlement.cheque_date ?? null },
+    remarks: { type: sql.NVarChar(500), value: settlement.remarks ?? null },
+  };
+  if (transaction) await requestWithParams(transaction, params).query(text);
+  else await query(text, params);
 }
 
-async function remove(settlementId) {
-  await query(
-    'DELETE FROM dbo.settlements WHERE settlement_id = @settlementId',
-    { settlementId: { type: sql.Int, value: settlementId } },
-  );
+async function remove(settlementId, transaction = null) {
+  const text = 'DELETE FROM dbo.settlements WHERE settlement_id = @settlementId';
+  const params = { settlementId: { type: sql.Int, value: settlementId } };
+  if (transaction) await requestWithParams(transaction, params).query(text);
+  else await query(text, params);
 }
 
 // Whole-voucher delete: its endorsement lines go in the same transaction as its receipt lines.

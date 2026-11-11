@@ -1,9 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NavPage } from '@/types';
-import { MENU_GROUPS, type MenuItem, type MenuGroup } from '@/lib/menu';
+import { MENU_GROUPS, visibleMenuItems } from '@/lib/menu';
+import { canUseMenuPopup, openMenuPopupChannel, type MenuPopupMessage, type RenderMessage } from '@/lib/menuPopup';
+import { hideMenuPopup, placeMenuPopup } from '@/lib/api';
+import MenuDropdown from './MenuDropdown';
 
 // The five hover menus themselves. Their contents — and the reasoning behind the numbering — live
 // in lib/menu.ts.
+//
+// Inside Electron each dropdown is shown in a window of its own (lib/menuPopup.ts) so it appears
+// above the open child windows instead of hidden under them (per the user, 2026-11-11). This
+// component still owns open/close and its timing; the popup only reports hover, clicks and drags
+// back. Outside Electron (a plain browser) the dropdown is drawn in-page as before.
 
 interface Props {
   currentPage: string;
@@ -22,26 +30,37 @@ interface Props {
 export default function MenuBar({ currentPage, subTabId, isAdmin, onOpenWindow, onDragStart, onDragEnd }: Props) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  const groupRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [usePopup] = useState(canUseMenuPopup);
   // Closing is delayed so the diagonal mouse path from a menu button down into its own dropdown
   // doesn't pass over dead space and shut the menu — the single most annoying way a hover menu can
   // fail. Opening is immediate.
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // While an item is being dragged to the Quick Menu the dropdown must stay put — closing it would
+  // take the drag's source away mid-drag.
+  const draggingRef = useRef(false);
+  // Pointer is over one of the menu buttons. The popup's "left the dropdown" arrives a moment after
+  // the button's own mouseenter when moving back up, and must not close the menu under the pointer.
+  const overBarRef = useRef(false);
 
-  const cancelClose = () => {
+  const cancelClose = useCallback(() => {
     if (closeTimer.current) {
       clearTimeout(closeTimer.current);
       closeTimer.current = null;
     }
-  };
-  const scheduleClose = () => {
+  }, []);
+  const scheduleClose = useCallback(() => {
     cancelClose();
+    if (draggingRef.current) return;
     closeTimer.current = setTimeout(() => setOpenIndex(null), 180);
-  };
+  }, [cancelClose]);
 
-  useEffect(() => cancelClose, []);
+  useEffect(() => cancelClose, [cancelClose]);
 
   // Click anywhere outside, or Escape, closes — a hover menu still needs both, because a menu left
-  // open after the pointer leaves the window has no other way back.
+  // open after the pointer leaves the window has no other way back. The popup window never takes
+  // focus, so Escape keeps reaching this window while it is open. Leaving the window for another
+  // one or another app closes it too.
   useEffect(() => {
     if (openIndex === null) return;
     function onDocClick(e: MouseEvent) {
@@ -50,30 +69,102 @@ export default function MenuBar({ currentPage, subTabId, isAdmin, onOpenWindow, 
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpenIndex(null);
     }
+    function onBlur() {
+      if (!draggingRef.current) setOpenIndex(null);
+    }
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
     return () => {
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('blur', onBlur);
     };
   }, [openIndex]);
 
-  const visibleItems = (group: MenuGroup) => {
-    const items = isAdmin ? group.items : group.items.filter(i => !i?.adminOnly);
-    // Drop separators that ended up leading, trailing, or doubled after that filter — otherwise
-    // hiding an admin-only item can leave a stray rule floating at the bottom of the menu.
-    const out: (MenuItem | null)[] = [];
-    for (const item of items) {
-      if (item === null) {
-        if (out.length === 0 || out[out.length - 1] === null) continue;
-        out.push(null);
-      } else {
-        out.push(item);
+  // ---- Dropdown in its own window ----------------------------------------------------------------
+
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  // The menu the popup should be showing, re-sent if the popup (re)loads after it was asked for.
+  const lastRenderRef = useRef<RenderMessage | null>(null);
+  // Latest props for the channel listener, which is attached once.
+  const latest = useRef({ onOpenWindow, onDragStart, onDragEnd });
+  useEffect(() => { latest.current = { onOpenWindow, onDragStart, onDragEnd }; });
+
+  useEffect(() => {
+    if (!usePopup) return;
+    const channel = openMenuPopupChannel();
+    channelRef.current = channel;
+    if (!channel) return;
+    channel.onmessage = (e: MessageEvent<MenuPopupMessage>) => {
+      const msg = e.data;
+      switch (msg?.type) {
+        case 'ready':
+          if (lastRenderRef.current) channel.postMessage(lastRenderRef.current);
+          break;
+        case 'hover':
+          // Pointer crossed between the menu button and its dropdown window: same timing rules as
+          // when both were in this page.
+          if (msg.inside) cancelClose();
+          else if (!overBarRef.current) scheduleClose();
+          break;
+        case 'pick':
+          cancelClose();
+          setOpenIndex(null);
+          latest.current.onOpenWindow(msg.page as NavPage, msg.tab);
+          break;
+        case 'dragstart':
+          draggingRef.current = true;
+          cancelClose();
+          latest.current.onDragStart({ page: msg.page as NavPage, tab: msg.tab, label: msg.label });
+          break;
+        case 'dragend':
+          draggingRef.current = false;
+          latest.current.onDragEnd();
+          // Dropped (or cancelled) somewhere else — the pointer is no longer over the menu.
+          setOpenIndex(null);
+          break;
       }
+    };
+    return () => {
+      channel.close();
+      channelRef.current = null;
+      // Logging out (or anything unmounting the bar) must not leave a dropdown on screen.
+      void hideMenuPopup();
+    };
+  }, [usePopup, cancelClose, scheduleClose]);
+
+  // Open → place the window under this menu's button, then tell it what to draw; it shows itself
+  // once drawn and measured. Sliding across to another menu just re-places the same window.
+  useEffect(() => {
+    if (!usePopup) return;
+    if (openIndex === null) {
+      lastRenderRef.current = null;
+      void hideMenuPopup();
+      return;
     }
-    while (out.length && out[out.length - 1] === null) out.pop();
-    return out;
-  };
+    const anchor = groupRefs.current[openIndex];
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    let stale = false;
+    void placeMenuPopup(rect.left, rect.bottom).then(res => {
+      // A newer open/close has happened since — its own call takes over.
+      if (stale || !res.ok || res.data.seq === null) return;
+      const msg: RenderMessage = {
+        type: 'render',
+        seq: res.data.seq,
+        groupIndex: openIndex,
+        isAdmin,
+        currentPage,
+        subTabId,
+        // 1.SETUP is ~500px tall: on a short laptop screen it scrolls instead of running off it.
+        maxHeight: Math.round(window.innerHeight * 0.7),
+      };
+      lastRenderRef.current = msg;
+      channelRef.current?.postMessage(msg);
+    });
+    return () => { stale = true; };
+  }, [usePopup, openIndex, isAdmin, currentPage, subTabId]);
 
   return (
     <div
@@ -92,7 +183,7 @@ export default function MenuBar({ currentPage, subTabId, isAdmin, onOpenWindow, 
       }}
     >
       {MENU_GROUPS.map((group, idx) => {
-        const items = visibleItems(group);
+        const items = visibleMenuItems(group, isAdmin);
         if (items.length === 0) return null;
         const isOpen = openIndex === idx;
         // The group whose page you are on stays marked, the way the sidebar highlighted its section.
@@ -103,9 +194,10 @@ export default function MenuBar({ currentPage, subTabId, isAdmin, onOpenWindow, 
         return (
           <div
             key={group.title}
+            ref={el => { groupRefs.current[idx] = el; }}
             className="relative flex-shrink-0"
-            onMouseEnter={() => { cancelClose(); setOpenIndex(idx); }}
-            onMouseLeave={scheduleClose}
+            onMouseEnter={() => { overBarRef.current = true; cancelClose(); setOpenIndex(idx); }}
+            onMouseLeave={() => { overBarRef.current = false; scheduleClose(); }}
           >
             <button
               type="button"
@@ -125,73 +217,23 @@ export default function MenuBar({ currentPage, subTabId, isAdmin, onOpenWindow, 
               {group.title}
             </button>
 
-            {isOpen && (
-              <div
-                className="absolute left-0 top-full z-50 py-1.5 rounded-b-md"
+            {isOpen && !usePopup && (
+              <MenuDropdown
+                items={items}
+                currentPage={currentPage}
+                subTabId={subTabId}
+                onPick={item => { setOpenIndex(null); onOpenWindow(item.page, item.tab); }}
+                onDragStart={item => onDragStart({ page: item.page, tab: item.tab, label: item.label })}
+                onDragEnd={onDragEnd}
+                className="absolute left-0 top-full z-50"
                 style={{
-                  minWidth: 300,
-                  background: '#fdfbf4',
-                  border: '1px solid rgba(176,141,87,0.55)',
-                  borderTop: 'none',
                   boxShadow: '0 16px 38px rgba(0,0,0,0.28)',
                   // 1.SETUP is ~500px tall. The app root is `overflow-hidden` on a full-height flex
                   // column, so on a short laptop screen the foot of that menu would be clipped with
                   // no way to reach it. Cap it and let the menu itself scroll instead.
                   maxHeight: '70vh',
-                  overflowY: 'auto',
                 }}
-              >
-                {items.map((item, i) =>
-                  item === null ? (
-                    <div
-                      key={`sep-${i}`}
-                      className="my-1.5"
-                      style={{ borderTop: '1px solid rgba(17,28,42,0.14)' }}
-                    />
-                  ) : (
-                    <button
-                      key={`${item.page}-${item.tab ?? ''}-${item.no}`}
-                      type="button"
-                      // Pinning moved here from the sidebar: a dropdown item is the drag source now.
-                      draggable
-                      onDragStart={e => {
-                        e.dataTransfer.setData(
-                          'text/plain',
-                          JSON.stringify({ page: item.page, tab: item.tab, label: item.label }),
-                        );
-                        onDragStart({ page: item.page, tab: item.tab, label: item.label });
-                      }}
-                      onDragEnd={onDragEnd}
-                      onClick={() => { setOpenIndex(null); onOpenWindow(item.page, item.tab); }}
-                      title="Opens in a new window · drag onto the Quick Menu to pin"
-                      // Text color lives in these classes (not the inline `style` below) on purpose —
-                      // an inline style's color always beats a stylesheet `:hover` rule regardless of
-                      // specificity, so `hover:text-*` here silently never applied when it was set via
-                      // `style` instead (2026-08-26: the fix that "did nothing" twice in a row).
-                      className="group flex w-full items-baseline gap-2.5 px-3.5 py-1.5 text-left text-[12.5px] transition-colors cursor-grab active:cursor-grabbing text-[var(--dark-heading)] hover:bg-[var(--brand-navy-hover)] hover:text-[var(--brand-gold)]"
-                      style={{
-                        fontWeight:
-                          item.page === currentPage && (!item.tab || item.tab === subTabId) ? 700 : 600,
-                      }}
-                    >
-                      {/* Fixed-width number column so the labels line up as they did in the original. */}
-                      <span
-                        className="font-mono shrink-0 text-right text-[rgba(17,28,42,0.55)] group-hover:text-[rgba(176,141,87,0.75)]"
-                        style={{ width: 34, fontSize: '11px' }}
-                      >
-                        {item.no}
-                      </span>
-                      <span className="truncate">{item.label}</span>
-                    </button>
-                  ),
-                )}
-                <div
-                  className="px-3.5 pt-1.5 mt-1 text-[10px] italic"
-                  style={{ borderTop: '1px solid rgba(17,28,42,0.14)', color: 'rgba(17,28,42,0.4)' }}
-                >
-                  *** End of Menu ***
-                </div>
-              </div>
+              />
             )}
           </div>
         );

@@ -18,6 +18,7 @@ const deletedNumbersRepository = require('../repositories/deletedDocumentNumbers
 // pair (Dr the endorsed account / Cr the payer, no cash/bank/cheque leg).
 const settlementsService = require('./settlements.service');
 const settlementsRepository = require('../repositories/settlements.repository');
+const businessAccountsService = require('./businessAccounts.service');
 const { withTransaction } = require('../db/pool');
 const ApiError = require('../errors/ApiError');
 const { today } = require('../utils/dates');
@@ -289,11 +290,118 @@ async function remove(voucherId, userId) {
   });
 }
 
+// Saves a whole voucher — header and every line — in ONE transaction (per the user, 2026-11-11:
+// the Receipts screen now works like the Journal Voucher one; Enter only adds a line on screen and
+// Save/Done writes them all together, so a voucher is never left half-saved).
+//
+// payload: { voucher_id?, voucher_date, remarks, allow_duplicate_cheque?, lines: [...] }
+// Each line is `kind: 'RECEIPT'` (draft_id when it already exists) or `kind: 'SETTLEMENT'` — an
+// endorsed line (settlement_id when it already exists). `unchanged: true` on an existing line means
+// "keep it as it is". An existing line left out of `lines` is deleted.
+//
+// Only while the voucher is entirely UNPOSTED, the same rule as update()/remove().
+async function saveWithLines(payload, userId, session) {
+  validateHeader(payload);
+  const lines = Array.isArray(payload.lines) ? payload.lines : [];
+  if (lines.length === 0) throw ApiError.badRequest('Add at least one entry before saving', 'EMPTY_VOUCHER');
+
+  let existing = null;
+  if (payload.voucher_id) {
+    existing = await getById(payload.voucher_id);
+    if (existing.status !== 'UNPOSTED') {
+      throw ApiError.conflict('Unpost this voucher before changing it', 'POSTED_LOCK');
+    }
+  }
+  const existingDrafts = new Set((existing?.lines ?? []).filter((l) => l.draft_id != null).map((l) => l.draft_id));
+  const existingSettlements = new Set((existing?.lines ?? []).filter((l) => l.settlement_id != null).map((l) => l.settlement_id));
+
+  // Validate every line before writing anything, with the same rules a single line always had.
+  const date = payload.voucher_date;
+  const keptDrafts = new Set();
+  const keptSettlements = new Set();
+  const chequesInVoucher = new Set();
+  const prepared = [];
+  for (const [index, line] of lines.entries()) {
+    const where = `Entry ${index + 1}: `;
+    try {
+      if (line.kind === 'SETTLEMENT') {
+        const id = line.settlement_id ?? null;
+        if (id != null && !existingSettlements.has(id)) throw ApiError.badRequest('this endorsed entry is not on this voucher');
+        if (id != null) keptSettlements.add(id);
+        if (id != null && line.unchanged) continue;
+        const body = { ...line, settlement_date: date };
+        await settlementsService.validate(body, session);
+        prepared.push({ kind: 'SETTLEMENT', id, fields: settlementsService.buildFields(body) });
+      } else {
+        const id = line.draft_id ?? null;
+        if (id != null && !existingDrafts.has(id)) throw ApiError.badRequest('this entry is not on this voucher');
+        if (id != null) keptDrafts.add(id);
+        const body = { ...line, receipt_date: date, allow_duplicate_cheque: payload.allow_duplicate_cheque };
+        // The same paper cheque twice on this one voucher is caught here, since none of it is saved
+        // yet for the database check below to find.
+        if (body.payment_mode === 'CHEQUE' && body.cheque_no && !payload.allow_duplicate_cheque) {
+          const key = `${body.ba_id}|${String(body.cheque_no).trim().toUpperCase()}`;
+          if (chequesInVoucher.has(key)) {
+            throw ApiError.conflict(
+              `Cheque ${String(body.cheque_no).trim()} from this party is entered twice on this voucher. Save again only if these are different cheques.`,
+              'DUPLICATE_CHEQUE',
+            );
+          }
+          chequesInVoucher.add(key);
+        }
+        if (id != null && line.unchanged) continue;
+        draftReceiptsService.validateHeader(body);
+        await receiptsService.assertNotDuplicateCheque(body, { excludeDraftId: id });
+        await businessAccountsService.assertAccessible(body.ba_id, session);
+        prepared.push({ kind: 'RECEIPT', id, fields: draftReceiptsService.buildFields(body) });
+      }
+    } catch (err) {
+      if (err instanceof ApiError) err.message = where + err.message;
+      throw err;
+    }
+  }
+
+  const voucherId = await withTransaction(async (transaction) => {
+    let id = existing?.voucher_id;
+    if (id == null) {
+      const voucherNo = await repository.nextVoucherNo(transaction);
+      id = await repository.insert(transaction, {
+        voucher_no: voucherNo, voucher_date: date, remarks: payload.remarks, created_by: userId,
+      });
+    } else {
+      await repository.updateHeader(transaction, id, { voucher_date: date, remarks: payload.remarks, updated_by: userId });
+      await draftReceiptsRepository.syncVoucherLineDates(transaction, id, date);
+      await settlementsRepository.syncVoucherDates(transaction, id, date);
+    }
+    // Lines taken off the voucher on screen.
+    for (const draftId of existingDrafts) {
+      if (!keptDrafts.has(draftId)) await draftReceiptsRepository.deleteDraft(transaction, draftId);
+    }
+    for (const settlementId of existingSettlements) {
+      if (!keptSettlements.has(settlementId)) await settlementsRepository.remove(settlementId, transaction);
+    }
+    // Changed and new lines, in screen order — a new line's place in the voucher is its insert order.
+    for (const line of prepared) {
+      if (line.kind === 'SETTLEMENT') {
+        if (line.id != null) await settlementsRepository.update(line.id, line.fields, transaction);
+        else await settlementsRepository.insert(transaction, { ...line.fields, created_by: userId, voucher_id: id });
+      } else if (line.id != null) {
+        await draftReceiptsRepository.updateHeader(transaction, line.id, line.fields);
+      } else {
+        await draftReceiptsRepository.insert(transaction, { ...line.fields, voucher_id: id, created_by: userId });
+      }
+    }
+    return id;
+  });
+
+  return getById(voucherId);
+}
+
 // Every retired voucher_no — the screen's number preview skips past them.
 function listDeletedNumbers() {
   return deletedNumbersRepository.listByType('RECEIPT_VOUCHER');
 }
 
 module.exports = {
-  list, getById, create, update, post, unpost, remove, deriveStatus, listDeletedNumbers,
+  list, getById, create, update, saveWithLines, post, unpost, remove, deriveStatus, listDeletedNumbers,
 };

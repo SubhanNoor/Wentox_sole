@@ -8,16 +8,23 @@ import { AppProvider } from '@/context/AppContext'
 import { installApiBridge } from '@/lib/ipcBridge'
 import { readStoredZoom } from '@/lib/zoom'
 import * as api from '@/lib/api'
+import { isMenuPopupWindow } from '@/lib/menuPopup'
+import MenuPopupApp from '@/components/MenuPopupApp'
 
 // Must run before anything else touches window.api — see lib/ipcBridge.ts.
 installApiBridge();
+
+// The MenuBar dropdown's own window (lib/menuPopup.ts) draws only the menu — no app, no login, no
+// data. Its zoom is set by the main process to match the main window, so the saved zoom isn't
+// applied here.
+const IS_MENU_POPUP = isMenuPopupWindow();
 
 // Re-apply this machine's saved zoom (or the shipped 90% default) immediately after the bridge is
 // up and BEFORE the first render. Electron's zoom factor does not survive a restart, so without
 // this every launch opens at 100% and only corrects itself once a component mounts — visible as the
 // whole window resizing a moment after it appears. Fire-and-forget: a failure here must never stop
 // the app from rendering, and the control in the header can still fix it by hand.
-api.zoom.set(readStoredZoom()).catch(() => {});
+if (!IS_MENU_POPUP) api.zoom.set(readStoredZoom()).catch(() => {});
 
 // SB-01: "Save and Post did nothing on one laptop", with no error and nothing in any log.
 //
@@ -82,6 +89,11 @@ window.addEventListener('unhandledrejection', e => reportUnhandled('unhandled pr
 window.addEventListener('error', e => reportUnhandled('uncaught error', e.error ?? e.message));
 
 createRoot(document.getElementById('root')!).render(
+  IS_MENU_POPUP ? (
+    <StrictMode>
+      <MenuPopupApp />
+    </StrictMode>
+  ) : (
   <StrictMode>
     <BrowserRouter>
       <ErrorBoundary>
@@ -90,5 +102,6 @@ createRoot(document.getElementById('root')!).render(
         </AppProvider>
       </ErrorBoundary>
     </BrowserRouter>
-  </StrictMode>,
+  </StrictMode>
+  ),
 )

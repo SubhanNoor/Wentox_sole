@@ -8,7 +8,7 @@ import SearchableSelect from '@/components/SearchableSelect';
 import SearchModal from '@/components/SearchModal';
 import PageToasts from '@/components/PageToasts';
 import * as api from '@/lib/api';
-import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, SettlementRow, ReceiptVoucherRow, VoucherActionResult, DeletedNumberRow } from '@/lib/api';
+import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, SettlementRow, ReceiptVoucherRow, ReceiptVoucherSaveInput, VoucherActionResult, DeletedNumberRow } from '@/lib/api';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import { useHeldKey } from '@/hooks/useHeldKey';
 import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
@@ -40,9 +40,18 @@ const RECEIPT_TAB_LABELS: Record<ReceiptTab, string> = {
 
 const today = () => new Date().toISOString().split('T')[0];
 
-// Row identity for the ▶ last-entered marker: an unposted receipt line by its draft_id, an endorsed
-// line by its settlement_id. A posted receipt line has neither and is never the marker.
-function lineKey(line: api.ReceiptVoucherLineRow): string | null {
+// A line as the screen holds it before Save/Done (per the user, 2026-11-11: Enter only adds a line
+// on screen, like the Journal Voucher). The server row's own shape, so saved and unsaved lines read
+// alike in the grid; `localKey` identifies one not saved yet, `unchanged` one still as saved.
+type WorkingLine = api.ReceiptVoucherLineRow & { localKey?: string; unchanged?: boolean };
+
+const toWorkingLines = (lines: api.ReceiptVoucherLineRow[]): WorkingLine[] => lines.map(l => ({ ...l, unchanged: true }));
+const newLocalKey = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+
+// Row identity: an unsaved line by its localKey, an unposted receipt line by its draft_id, an
+// endorsed line by its settlement_id. A posted receipt line has none of them.
+function lineKey(line: WorkingLine): string | null {
+  if (line.localKey) return `n${line.localKey}`;
   if (line.settlement_id != null) return `s${line.settlement_id}`;
   if (line.draft_id != null) return `d${line.draft_id}`;
   return null;
@@ -156,7 +165,7 @@ export default function ReceiptsPage() {
   // it. hasPageDraftAtMount gates the auto-open further down (only genuine unsaved typing skips
   // it); hasClickedNew gates the No. preview and the awaitingNew lock; only New calls markNewClicked.
   const { hasRealDraftAtMount: hasPageDraftAtMount, hasClickedNew, setHasClickedNew, markNewClicked } =
-    useNewDocGate('receipts', ['baId', 'amount', 'details', 'chequeNo', 'remarks', 'voucherRemarks', 'endorseToBaId']);
+    useNewDocGate('receipts', ['baId', 'amount', 'details', 'chequeNo', 'remarks', 'voucherRemarks', 'endorseToBaId', 'lines']);
   // Master/Detail edit-scope radio (left-side widget, below) — which half of the voucher becomes
   // editable while an existing (unposted) line is pulled back into the strip via handleEditLine:
   // Master unlocks only the voucher header (Date/Remarks), Detail unlocks only the entry strip and
@@ -234,7 +243,9 @@ export default function ReceiptsPage() {
   const [docKind, setDocKind] = usePersistentField<'RECEIPT' | 'SETTLEMENT'>('receipts', 'docKind', 'RECEIPT');
   // Which table `receiptId` points into. An unposted receipt now lives in dbo.draft_receipts and a
   // posted one in dbo.receipts, so the id alone is ambiguous — this says which id space it is in.
-  const [entryIsDraft, setEntryIsDraft] = usePersistentField('receipts', 'entryIsDraft', false);
+  // Only written now: voucher lines are identified by editingKey since Save/Done write the whole
+  // voucher (2026-11-11); kept so a stored value from before still has its key.
+  const [, setEntryIsDraft] = usePersistentField('receipts', 'entryIsDraft', false);
 
   // RJ-02: previewed account while arrow-keying through the dropdown, for the live balance tooltip.
   const [previewBaId, setPreviewBaId] = useState<number | null>(null);
@@ -316,7 +327,7 @@ export default function ReceiptsPage() {
   // The voucher is created LAZILY, on the first Done — not when the page opens. voucher_no is the
   // client's "C.Book No" and is allocated MAX+1, so creating one eagerly would burn a number every
   // time somebody merely visited the screen and walked away.
-  const [voucher, setVoucher] = useState<ReceiptVoucherRow | null>(null);
+  const [voucher, setVoucherState] = useState<ReceiptVoucherRow | null>(null);
   // Dropdown follows whatever document is on screen — see the hook for why.
   useBrowseFilterFollowsDocument(voucher?.voucher_id, voucher?.status === 'POSTED', setNavFilter);
   const [voucherRemarks, setVoucherRemarks] = usePersistentField('receipts', 'voucherRemarks', '');
@@ -339,6 +350,21 @@ export default function ReceiptsPage() {
   const [openVoucherId, setOpenVoucherId] = usePersistentField<number | null>('receipts', 'openVoucherId', null);
   useEffect(() => { setOpenVoucherId(voucher?.voucher_id ?? null); }, [voucher, setOpenVoucherId]);
 
+  // The voucher's lines as the screen holds them — what the grid shows and Save/Done writes. Enter
+  // only changes this list; it is persisted like the Journal Voucher's lines, so unsaved work
+  // survives a page switch or a restart. `linesDirty`: it differs from the saved voucher.
+  const [workingLines, setWorkingLines] = usePersistentField<WorkingLine[]>('receipts', 'lines', []);
+  const [linesDirty, setLinesDirty] = usePersistentField('receipts', 'linesDirty', false);
+  // The line pulled into the entry row for correcting (lineKey), replaced in place on Enter.
+  const [editingKey, setEditingKey] = usePersistentField<string | null>('receipts', 'editingKey', null);
+  // Showing a voucher from the server always shows ITS lines and header — anything unsaved is gone.
+  const setVoucher = (v: ReceiptVoucherRow | null) => {
+    setVoucherState(v);
+    setWorkingLines(v ? toWorkingLines(v.lines ?? []) : []);
+    setLinesDirty(false);
+    if (v) { setDate(v.voucher_date); setVoucherRemarks(v.remarks ?? ''); }
+  };
+
 
   // Alerts
   const [errorMsg, setErrorMsg] = useState('');
@@ -352,7 +378,18 @@ export default function ReceiptsPage() {
   const flash = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(''), 3500); };
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
-  const voucherLines = voucher?.lines ?? [];
+  const voucherLines = workingLines;
+  // Footer totals from the lines on screen, the same sums receiptVouchers.service#summariseLines
+  // makes: endorsed money counts in the total but in none of Cash/Cheque/Online.
+  const sumAmounts = (rows: WorkingLine[]) => rows.reduce((acc, l) => acc + (Number(l.amount) || 0), 0);
+  const receivedLines = voucherLines.filter(l => l.endorse_to_ba_id == null && l.settlement_id == null);
+  const lineTotals = {
+    cash: sumAmounts(receivedLines.filter(l => l.payment_mode === 'CASH')),
+    cheque: sumAmounts(receivedLines.filter(l => l.payment_mode === 'CHEQUE')),
+    online: sumAmounts(receivedLines.filter(l => l.payment_mode === 'ONLINE')),
+    endorsed: sumAmounts(voucherLines.filter(l => l.endorse_to_ba_id != null || l.settlement_id != null)),
+    total: sumAmounts(voucherLines),
+  };
 
   // RJ-03: wraps the first entry field (the account picker) so Done/New can put the cursor back on
   // it. The form does not unmount between lines, so the app-wide G-01 auto-focus never re-fires and
@@ -451,6 +488,20 @@ export default function ReceiptsPage() {
   // is actually visible while unlocked; handleDone routes to receiptVouchers.update() instead of
   // the entry-line save while this is true.
   const isHeaderEditing = mode === 'edit' && editTarget === 'master';
+  // Same rule as the Journal Voucher toolbar (per the user, 2026-11-11): Save/Done are live only
+  // when there is something valid to save — never on the locked blank before New, never on an
+  // empty entry row. The header edit needs its date; an entry needs its account and amount (and,
+  // endorsed, who it goes to). The finer per-mode checks still run in buildPayload on save.
+  const canSaveEntry = !isViewMode && !awaitingNew && (
+    isHeaderEditing
+      ? !!date
+      : !!baId && amount > 0 && (!isEndorsed || !!endorseToBaId)
+  );
+  // Anything typed in the entry row — Save/Done add it as a line first, so nothing is lost.
+  const entryHasContent = !!baId || amount > 0 || !!remarks.trim() || !!details.trim() || !!chequeNo.trim() || !!chequeDate;
+  // Save/Done write the whole voucher (like the Journal Voucher): live once New was pressed and
+  // there is at least one line on screen, or a valid one in the entry row.
+  const canSaveVoucher = !isViewMode && !awaitingNew && !!date && (voucherLines.length > 0 || canSaveEntry);
 
   // A receipt can name ANY business account, not just a customer's (migration 014) — the same
   // freedom the Expenses/Naam side has always had.
@@ -615,6 +666,7 @@ export default function ReceiptsPage() {
 
   const handleNew = () => {
     setMode('new');
+    setEditingKey(null);
     setHasClickedNew(false);
     setEditScope('master'); // a blank voucher starts scoped to Master, same as any freshly loaded one
     setEditTarget(null);
@@ -706,45 +758,14 @@ export default function ReceiptsPage() {
     refreshAllSettlements(); // RP-01: keeps navPostedList/navUnpostedList (First/Prev/Next/Find) current
   };
 
-  // An endorsed entry is a LINE of the open voucher (per the user, 2026-10-05) — shown in its
-  // detail rows marked Endorsed, posted/unposted/deleted with it. It is still a settlement
-  // underneath (Dr the endorsed account / Cr the payer, nothing to cash/bank/cheques in hand).
-  const handleSaveEndorsedLine = async () => {
-    const payload = buildSettlementPayload();
-    if (!payload) return;
-    const editing = mode === 'edit' && docKind === 'SETTLEMENT' && receiptId != null;
-
-    let openVoucher = voucher;
-    if (!editing) {
-      // Same backstop and lazy voucher creation as an ordinary line in handleDone.
-      if (!openVoucher && !hasClickedNew) { setErrorMsg('Click New Voucher to start a voucher first.'); return; }
-      if (!openVoucher) {
-        const created = await api.receiptVouchers.create({ voucher_date: date, remarks: voucherRemarks.trim() || undefined });
-        if (!created.ok) { fail('Failed to open voucher: ' + created.error.message); return; }
-        openVoucher = created.data;
-      }
-    }
-    if (!openVoucher) return;
-
-    const result = editing
-      ? await api.settlements.update(receiptId, payload)
-      : await api.settlements.create({ ...payload, voucher_id: openVoucher.voucher_id });
-    if (!result.ok) { fail('Failed to save endorsed entry: ' + result.error.message); return; }
-
-    refreshAllVouchers();
-    await refreshVoucher(openVoucher.voucher_id);
-    setLastEnteredLineId(`s${result.data.settlement_id}`);
-    clearEntryRow();
-    flash(editing ? 'Endorsed entry updated.' : 'Endorsed entry added to the voucher.');
-    setBalanceRefreshKey(k => k + 1);
-  };
-
   // RJ-03: clears the entry row only — the voucher, its committed lines and the header date all
   // stay put, because the next thing the user types is the next line of the SAME voucher. This is
   // what "Done" leaves behind. Distinct from handleNew(), which abandons the whole voucher.
+  // On a saved voucher the entry row stays unlocked for the next line, as the Journal Voucher's does.
   const clearEntryRow = () => {
-    setMode('new');
-    setEditTarget(null);
+    setMode(voucher ? 'edit' : 'new');
+    setEditTarget(voucher ? 'detail' : null);
+    setEditingKey(null);
     setReceiptId(null);
     setEntryIsDraft(false);
     setReceiptStatus('DRAFT');
@@ -770,120 +791,152 @@ export default function ReceiptsPage() {
     requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
   };
 
-  // RJ-03: "Done" — commit the entry row as a line of the open voucher and re-arm the form.
-  //
-  // Creates the voucher on first use (see the `voucher` state note). An endorsement is NOT a
-  // receipt — it lives in dbo.settlements, has no cash/bank leg and no voucher_id — so it still
-  // saves through its own path and never joins the grid.
+  // Enter on the entry row (the form's submit) — like the Journal Voucher's Enter on Narration it
+  // only adds the line to the voucher ON SCREEN; nothing is written until Save/Done (per the user,
+  // 2026-11-11). Enter on an EMPTY row is Done.
   const handleDone = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isEndorsed) {
-      // A standalone endorsement saved before endorsements joined vouchers keeps its own path;
-      // anything else endorsed is a line of the voucher on screen.
-      if (isSettlementDoc) await handleSaveSettlement();
-      else await handleSaveEndorsedLine();
-      return;
-    }
-
-    // Editing the voucher header (Edit + Master scope) is a different save entirely from
-    // committing an entry line — routes to receiptVouchers.update() instead of draftReceipts
-    // create/update. Fixes the gap from when the Edit button/Master-Detail split was added
-    // (2026-08-31): unlocking Date/Remarks alone never persisted anything.
-    if (isHeaderEditing) {
-      if (!voucher) return;
-      if (!date) { setErrorMsg('Please pick a date.'); return; }
-      const res = await api.receiptVouchers.update(voucher.voucher_id, {
-        voucher_date: date,
-        remarks: voucherRemarks.trim() || undefined,
-      });
-      if (!res.ok) { fail('Failed to update voucher: ' + res.error.message); return; }
-      await refreshVoucher(voucher.voucher_id);
-      refreshAllVouchers();
-      clearEntryRow();
-      flash('Voucher header updated.');
-      return;
-    }
-
-    // Done on an UNTOUCHED entry row means "I'm finished with this voucher", not "commit this
-    // row" — reported by the user (2026-08-31) after adding two entries and being told to
-    // "select an account" when there was nothing left to add. Every line is already saved in
-    // draft_receipts by the Done that committed it, so there is genuinely nothing to write here
-    // and refusing was just noise. Say what state the voucher is in and point at Post, rather
-    // than silently doing nothing.
-    //
-    // Deliberately only when the row is COMPLETELY untouched: if any field is filled the user
-    // was part-way through an entry, so the normal per-field validation below still runs and
-    // tells them what is missing instead of quietly discarding what they typed.
-    const entryRowUntouched = !baId && amount <= 0 && !remarks.trim() && !details.trim()
-      && !chequeNo.trim() && !chequeDate && mode !== 'edit';
-    if (entryRowUntouched) {
-      if (voucher && voucherLines.length > 0) {
-        flash(`Voucher saved — ${voucherLines.length} ${voucherLines.length === 1 ? 'entry' : 'entries'}. Press Post to send it to the ledger.`);
-      } else {
-        setErrorMsg('Add at least one entry before finishing this voucher.');
-      }
-      return;
-    }
-
-    const payload = buildPayload();
-    if (!payload) return;
-
-    // Backstop for the awaitingNew lock — a new voucher (and its number) only after New.
-    if (!voucher && !hasClickedNew) { setErrorMsg('Click New Voucher to start a voucher first.'); return; }
-    let openVoucher = voucher;
-    if (!openVoucher) {
-      const created = await api.receiptVouchers.create({ voucher_date: date, remarks: voucherRemarks.trim() || undefined });
-      if (!created.ok) { fail('Failed to open voucher: ' + created.error.message); return; }
-      openVoucher = created.data;
-    }
-
-    // Every line carries the voucher's own date, not whatever the entry row happens to hold — the
-    // header owns the date on this screen (there is one Date field, on the head).
-    const linePayload = { ...payload, receipt_date: openVoucher.voucher_date, voucher_id: openVoucher.voucher_id };
-
-    // A voucher line is saved UNPOSTED, so it goes into dbo.draft_receipts — the real receipts
-    // table only ever holds posted documents now. Posting the voucher is what moves each line
-    // across (draftReceipts.confirm), and unposting moves it back.
-    const saveLine = (allowDuplicateCheque = false) => {
-      const body = allowDuplicateCheque ? { ...linePayload, allow_duplicate_cheque: true } : linePayload;
-      return mode === 'edit' && receiptId != null && entryIsDraft
-        ? api.draftReceipts.update(receiptId, body)
-        : api.draftReceipts.create(body);
-    };
-    const firstTry = await saveLine();
-    // Same party, same cheque number already on the books: ask before saving it a second time —
-    // one paper cheque entered twice credits the customer twice.
-    if (!firstTry.ok && firstTry.error.code === 'DUPLICATE_CHEQUE') {
-      const voucherForLine = openVoucher;
-      setDuplicateCheque({
-        message: firstTry.error.message,
-        confirm: async () => finishLine(await saveLine(true), voucherForLine),
-      });
-      return;
-    }
-    await finishLine(firstTry, openVoucher);
+    // A standalone endorsement saved before endorsements joined vouchers keeps its own path.
+    if (isSettlementDoc) { await handleSaveSettlement(); return; }
+    if (!isHeaderEditing && entryHasContent) { commitEntryLine(); return; }
+    await saveVoucher(true);
   };
 
-  // Everything after a line's save call — shared by a normal Done and a Done repeated from the
-  // duplicate-cheque prompt.
-  const finishLine = async (result: Awaited<ReturnType<typeof api.draftReceipts.create>>, openVoucher: ReceiptVoucherRow) => {
-    if (!result.ok) { fail('Failed to save entry: ' + result.error.message); return; }
-
-    // Nothing to clean up: an unposted receipt IS a draft now, so loading one into the entry row
-    // and pressing Done edits that same row in place (the update() branch above) rather than
-    // creating a second copy that the original then had to be deleted to avoid duplicating.
-    refreshAllVouchers(); // a first Done on a fresh entry just created a new voucher
-
-    const wasEdit = mode === 'edit';
-    await refreshVoucher(openVoucher.voucher_id);
-    // G-05: after `clearEntryRow()` — that resets every entry field but has nothing to do with
-    // which line the pointer sits on, so ordering here doesn't matter, but doing it right after
-    // the line is confirmed on screen (refreshVoucher above) means the ▶ and the scroll-into-view
-    // land the instant the grid actually shows the committed row.
-    setLastEnteredLineId(`d${result.data.draft_id}`);
+  // Validates the entry row and puts it into the on-screen voucher — in place of the line being
+  // corrected, if any. Returns the new line list, or null when the row is not valid yet.
+  const commitEntryLine = (): WorkingLine[] | null => {
+    if (!voucher && !hasClickedNew) { setErrorMsg('Click New Voucher to start a voucher first.'); return null; }
+    const editing = editingKey != null ? voucherLines.find(l => lineKey(l) === editingKey) : undefined;
+    const account = businessAccounts.find(b => b.ba_id === Number(baId));
+    let line: WorkingLine;
+    if (isEndorsed) {
+      const p = buildSettlementPayload();
+      if (!p) return null;
+      const to = businessAccounts.find(b => b.ba_id === p.to_ba_id);
+      // A receipt line turned into an endorsement is a different record: the old one goes, a new one comes.
+      const keepId = editing?.settlement_id ?? null;
+      line = {
+        receipt_id: null, draft_id: null, settlement_id: keepId,
+        receipt_date: date, ba_id: p.from_ba_id, account_name: account?.name, account_code: account?.code,
+        customer_id: null, amount: p.amount, commission: 0, payment_mode: p.payment_mode ?? 'CASH',
+        details: null, bank_id: null, online_ba_id: null, remarks: p.remarks ?? null, status: 'DRAFT',
+        cheque_no: p.cheque_no, cheque_date: p.cheque_date,
+        endorse_to_ba_id: p.to_ba_id, endorse_to_name: to?.name ?? null, endorse_to_code: to?.code ?? null,
+        voucher_id: voucher?.voucher_id ?? null,
+        localKey: keepId == null ? (editing?.localKey ?? newLocalKey()) : undefined,
+        unchanged: false,
+      };
+    } else {
+      const p = buildPayload();
+      if (!p) return null;
+      const keepId = editing?.draft_id ?? null;
+      line = {
+        receipt_id: null, draft_id: keepId, settlement_id: null,
+        receipt_date: date, ba_id: p.ba_id, account_name: account?.name, account_code: account?.code,
+        customer_id: selectedCustomer?.customer_id ?? null, amount: p.amount, commission: p.commission ?? 0,
+        payment_mode: p.payment_mode, details: p.details ?? null, bank_id: null, online_ba_id: p.online_ba_id ?? null,
+        remarks: p.remarks ?? null, status: 'DRAFT',
+        cheque_no: p.cheque_no, cheque_date: p.cheque_date, cheque_received_date: p.cheque_received_date ?? null,
+        voucher_id: voucher?.voucher_id ?? null,
+        localKey: keepId == null ? (editing?.localKey ?? newLocalKey()) : undefined,
+        unchanged: false,
+      };
+    }
+    const at = editing ? voucherLines.indexOf(editing) : -1;
+    const next = at >= 0 ? voucherLines.map((l, i) => (i === at ? line : l)) : [...voucherLines, line];
+    setWorkingLines(next);
+    setLinesDirty(true);
+    setLastEnteredLineId(lineKey(line));
+    setSelectedLineKey(null);
     clearEntryRow();
-    flash(wasEdit ? 'Entry updated.' : 'Entry added to the voucher.');
+    return next;
+  };
+
+  // A line as receipt-vouchers:saveWithLines takes it.
+  const toSaveLine = (l: WorkingLine): ReceiptVoucherSaveInput['lines'][number] => (
+    l.endorse_to_ba_id != null || l.settlement_id != null
+      ? {
+          kind: 'SETTLEMENT', settlement_id: l.settlement_id ?? null, unchanged: l.unchanged || undefined,
+          from_ba_id: l.ba_id, to_ba_id: Number(l.endorse_to_ba_id), amount: Number(l.amount),
+          payment_mode: l.payment_mode ?? undefined, cheque_no: l.cheque_no || undefined,
+          cheque_date: toDateInputValue(l.cheque_date) || undefined, remarks: l.remarks || undefined,
+        }
+      : {
+          kind: 'RECEIPT', draft_id: l.draft_id ?? null, unchanged: l.unchanged || undefined,
+          ba_id: l.ba_id, amount: Number(l.amount), commission: Number(l.commission) || undefined,
+          payment_mode: l.payment_mode, details: l.details || undefined,
+          online_ba_id: l.online_ba_id ?? undefined, bank_id: l.online_ba_id == null ? (l.bank_id ?? undefined) : undefined,
+          cheque_no: l.cheque_no || undefined, cheque_date: toDateInputValue(l.cheque_date) || undefined,
+          cheque_received_date: toDateInputValue(l.cheque_received_date) || undefined, remarks: l.remarks || undefined,
+        }
+  );
+
+  // Save (keep editing) and Done (finish, read-only) — the whole voucher, header and every line, in
+  // one transaction, like the Journal Voucher's Save/Done. Returns the saved voucher, for Save+Post.
+  const saveVoucher = async (finalize: boolean, allowDuplicateCheque = false): Promise<ReceiptVoucherRow | null> => {
+    if (awaitingNew) { setErrorMsg('Click New Voucher to start a voucher first.'); return null; }
+    if (!date) { setErrorMsg('Please pick a date.'); return null; }
+    let lines = voucherLines;
+    if (!isHeaderEditing && entryHasContent) {
+      const next = commitEntryLine();
+      if (!next) return null;
+      lines = next;
+    }
+    if (lines.length === 0) { setErrorMsg('Add at least one entry before saving.'); return null; }
+    const res = await api.receiptVouchers.saveWithLines({
+      voucher_id: voucher?.voucher_id ?? null,
+      voucher_date: date,
+      remarks: voucherRemarks.trim() || undefined,
+      allow_duplicate_cheque: allowDuplicateCheque || undefined,
+      lines: lines.map(toSaveLine),
+    });
+    if (!res.ok) {
+      // Same party, same cheque number already on the books (or twice on this voucher): ask before
+      // saving it — one paper cheque entered twice credits the customer twice.
+      if (res.error.code === 'DUPLICATE_CHEQUE') {
+        setDuplicateCheque({ message: res.error.message, confirm: async () => { await saveVoucher(finalize, true); } });
+        return null;
+      }
+      fail('Failed to save voucher: ' + res.error.message);
+      return null;
+    }
+    clearReceiptsDraft();
+    setVoucher(res.data);
+    setEditingKey(null);
+    setSelectedLineKey(null);
+    setErrorMsg('');
+    const n = res.data.lines?.length ?? lines.length;
+    if (finalize) {
+      setMode('view');
+      setEditTarget(null);
+      focusNewButton();
+      flash(`Voucher ${res.data.voucher_no} saved — ${n} ${n === 1 ? 'entry' : 'entries'}. Press Post to send it to the ledger.`);
+    } else {
+      setMode('edit');
+      setEditTarget('detail');
+      requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
+      flash(`Voucher ${res.data.voucher_no} saved — ${n} ${n === 1 ? 'entry' : 'entries'}.`);
+    }
+    refreshAllVouchers();
+    refreshAllSettlements();
     setBalanceRefreshKey(k => k + 1);
+    return res.data;
+  };
+
+  // A grid row's own Delete only takes the line off the voucher on screen; Save/Done writes that
+  // (like the Journal Voucher). The LAST line of a saved voucher deletes the whole voucher instead.
+  const removeLine = (line: WorkingLine) => {
+    const key = lineKey(line);
+    const at = voucherLines.indexOf(line);
+    const rest = voucherLines.filter(l => l !== line);
+    setWorkingLines(rest);
+    setLinesDirty(true);
+    if (voucher) { setMode('edit'); setEditTarget('detail'); }
+    if (key != null && key === editingKey) clearEntryRow();
+    if (key != null && key === lastEnteredLineId) {
+      setLastEnteredLineId(rest.length ? lineKey(rest[Math.min(at, rest.length - 1)]) : null);
+    }
+    setSelectedLineKey(null);
   };
 
   // Re-reads the whole voucher rather than patching the line into local state: the header's derived
@@ -897,8 +950,14 @@ export default function ReceiptsPage() {
 
   // Restores the open voucher once, on mount, from openVoucherId (see its own comment above) — the
   // permanent fix for entries disappearing after switching pages and back.
+  // Unsaved lines on screen (linesDirty) are kept: only the voucher itself is re-read under them.
   useEffect(() => {
-    if (openVoucherId != null) refreshVoucher(openVoucherId);
+    if (openVoucherId == null) return;
+    if (!linesDirty) { refreshVoucher(openVoucherId); return; }
+    void api.receiptVouchers.get(openVoucherId).then(res => {
+      if (res.ok) setVoucherState(res.data);
+      else fail('Failed to reload voucher: ' + res.error.message);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -907,8 +966,10 @@ export default function ReceiptsPage() {
   // Each line posts in its own transaction on the backend, so this can come back partly done —
   // `failed` is read and shown per line rather than treating a resolved call as success. When
   // everything posts, the screen moves straight on to a fresh voucher, which is the client's flow.
-  const handlePostVoucher = async () => {
-    if (!voucher) return;
+  // `target`: Save+Post posts the voucher it has just saved, before `voucher` has re-rendered.
+  const handlePostVoucher = async (target: ReceiptVoucherRow | null = voucher) => {
+    if (!target) return;
+    const voucher = target;
     setVoucherBusy(true);
     setVoucherResult(null);
     const res = await api.receiptVouchers.post(voucher.voucher_id);
@@ -960,7 +1021,7 @@ export default function ReceiptsPage() {
   const startNewVoucher = () => {
     // Detail + an unposted voucher on screen adds an entry — from view mode too, no Edit needed
     // (standard §6). Master (or nothing open, or a posted voucher) starts a whole new voucher.
-    if (editScope === 'detail' && voucher && voucher.status !== 'POSTED') {
+    if (editScope === 'detail' && !awaitingNew && (voucher ? voucher.status !== 'POSTED' : voucherLines.length > 0)) {
       clearEntryRow();
       return;
     }
@@ -1185,15 +1246,22 @@ export default function ReceiptsPage() {
 
   // RJ-03: pull a committed line back into the entry row to correct it. Only while the line itself
   // is unposted — a posted line has ledger entries, and receipts:update rejects it outright.
-  const handleEditLine = (line: api.ReceiptVoucherLineRow) => {
-    if (line.status !== 'CONFIRMED' && line.settlement_id != null) {
+  const handleEditLine = (line: WorkingLine) => {
+    if (line.status === 'CONFIRMED') {
+      fail('Unpost this voucher before editing that entry.');
+      return;
+    }
+    // The line stays in the list; Enter puts the corrected copy in its place. Only a SAVED voucher
+    // needs unlocking — an unsaved new one is open already (as on the Journal Voucher).
+    setEditingKey(lineKey(line));
+    if (voucher) setMode('edit');
+    setDocKind('RECEIPT');
+    setEntryIsDraft(false);
+    setReceiptId(null);
+    if (line.endorse_to_ba_id != null || line.settlement_id != null) {
       // An endorsed line: back into the entry row with Endorse ticked, saved via settlements.
-      setMode('edit');
       setEditTarget('detail'); // editing an entry unlocks the Detail half only (standard §6)
       setSelectedLineKey(null);
-      setDocKind('SETTLEMENT');
-      setEntryIsDraft(false);
-      setReceiptId(line.settlement_id);
       setReceiptStatus(line.status);
       setBaId(String(line.ba_id));
       setPreviewBaId(line.ba_id);
@@ -1212,18 +1280,8 @@ export default function ReceiptsPage() {
       requestAnimationFrame(() => firstEntryFieldRef.current?.focus());
       return;
     }
-    if (line.status === 'CONFIRMED' || line.draft_id == null) {
-      fail('Unpost this voucher before editing that entry.');
-      return;
-    }
-    setMode('edit');
     setEditTarget('detail'); // editing an entry unlocks the Detail half only (standard §6)
     setSelectedLineKey(null);
-    setDocKind('RECEIPT');
-    // An unposted line lives in draft_receipts, so the id the entry row carries while editing is a
-    // draft_id — handleDone routes on entryIsDraft to know which table to write back to.
-    setEntryIsDraft(true);
-    setReceiptId(line.draft_id);
     setReceiptStatus(line.status);
     setBaId(String(line.ba_id));
     setPreviewBaId(line.ba_id);
@@ -1634,8 +1692,6 @@ export default function ReceiptsPage() {
                 }
                 setMode('edit');
                 setEditTarget('master');
-                setDate(voucher.voucher_date);
-                setVoucherRemarks(voucher.remarks ?? '');
                 requestAnimationFrame(() => firstFieldRef.current?.focus());
               },
               disabled: isSettlementDoc
@@ -1643,12 +1699,22 @@ export default function ReceiptsPage() {
                 : (!voucher || voucher.status === 'POSTED'),
               title: editScope === 'detail' ? 'Edit the selected entry' : 'Edit the header fields',
             }}
-            save={{ submit: true, form: 'receipt-entry-form', disabled: isViewMode, title: 'Save this entry into the voucher' }}
-            done={{ submit: true, form: 'receipt-entry-form', disabled: isViewMode, title: isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — add this entry to the voucher' }}
+            // Save/Done write the WHOLE voucher (like the Journal Voucher); Enter only adds a line.
+            save={{
+              onClick: async () => { if (isSettlementDoc) await handleSaveSettlement(); else await saveVoucher(false); },
+              disabled: isSettlementDoc ? !canSaveEntry : !canSaveVoucher,
+              title: 'Save — keep editing this voucher',
+            }}
+            done={{
+              onClick: async () => { if (isSettlementDoc) await handleSaveSettlement(); else await saveVoucher(true); },
+              disabled: isSettlementDoc ? !canSaveEntry : !canSaveVoucher,
+              title: 'Done — finish this voucher, then Post it',
+            }}
             // Cancel drops the unsaved correction and reloads the saved document, read-only (§6).
             cancel={{
               onClick: async () => {
                 if (isSettlementDoc && receiptId != null) await openSettlementInEntry(receiptId);
+                // Drops every unsaved change and shows the saved voucher again.
                 else if (voucher) await openVoucherInEntry(voucher.voucher_id);
                 else clearEntryRow();
               },
@@ -1659,7 +1725,8 @@ export default function ReceiptsPage() {
             prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}
             next={{ onClick: handleNavNext, disabled: !canNavNext }}
             last={{ onClick: handleNavLast, disabled: navList.length === 0 }}
-            print={{ onClick: () => window.print(), disabled: !voucher }}
+            // Print/PDF/Excel/Post act on the SAVED voucher — not while an edit is half-done on screen.
+            print={{ onClick: () => window.print(), disabled: !voucher || !isViewMode }}
             find={{ onClick: () => setIsFindOpen(true) }}
             unpost={{
               onClick: () => { if (isSettlementDoc) { handleUnpost(); return; } handleUnpostVoucher(); },
@@ -1672,20 +1739,24 @@ export default function ReceiptsPage() {
               onClick: async () => { if (isSettlementDoc) { await handlePost(); return; } await handlePostVoucher(); focusNewButton(); },
               disabled: isSettlementDoc
                 ? (!isViewMode || isPosted)
-                : (!voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy),
+                : (!voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy || !isViewMode),
               title: isSettlementDoc ? 'Post Endorsement' : 'Post Voucher',
             }}
             exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
-            saveAndPost={{ disabled: true, title: 'Not used here — each entry is saved as you add it; press Post when the voucher is complete' }}
+            saveAndPost={{
+              onClick: async () => { const saved = await saveVoucher(true); if (saved) { await handlePostVoucher(saved); focusNewButton(); } },
+              disabled: isSettlementDoc || !canSaveVoucher,
+              title: 'Save & Post',
+            }}
             postAll={{ onClick: async () => { await handlePostAllVouchers(); focusNewButton(); }, disabled: navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted', title: `Post All (${navUnpostedVouchers.length})` }}
-            pdf={{ onClick: () => window.print(), disabled: !voucher, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
+            pdf={{ onClick: () => window.print(), disabled: !voucher || !isViewMode, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
             excel={{
               onClick: () => exportRowsToExcel(
                 `receipts-voucher-${voucher?.voucher_no ?? ''}`,
                 ['Account', 'Details', 'Amount'],
                 voucherLines.map(l => [l.account_name ?? '', l.details ?? '', Number(l.amount)]),
               ),
-              disabled: !voucher || voucherLines.length === 0,
+              disabled: !voucher || voucherLines.length === 0 || !isViewMode,
               title: 'Export Excel',
             }}
           >
@@ -1845,6 +1916,11 @@ export default function ReceiptsPage() {
                 noValidate
                 className="flex flex-col gap-2 shrink-0"
               >
+                {/* Hidden submit target for the app-wide G-01 rule (see fieldNav.ts#findSubmitButton)
+                    — it looks for a type="submit" button to click when Enter lands on the form's
+                    last field, so Enter adds the line (handleDone). The toolbar's Save/Done are plain
+                    buttons now that they write the whole voucher (2026-11-11). */}
+                <button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />
                 <div
                   className="grid gap-x-2 gap-y-1.5"
                   style={{
@@ -1869,7 +1945,7 @@ export default function ReceiptsPage() {
                     <input
                       ref={firstFieldRef}
                       type="date"
-                      value={voucher && !isHeaderEditing ? voucher.voucher_date : date}
+                      value={date}
                       disabled={masterFieldsLocked}
                       onChange={e => setDate(e.target.value)}
                       className="soleria-input soleria-input-compact font-semibold"
@@ -1897,7 +1973,7 @@ export default function ReceiptsPage() {
                     <label className="block text-[11px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--secondary-text)' }}>Remarks</label>
                     <input
                       type="text"
-                      value={voucher && !isHeaderEditing ? (voucher.remarks ?? '') : voucherRemarks}
+                      value={voucherRemarks}
                       disabled={masterFieldsLocked}
                       onChange={e => setVoucherRemarks(e.target.value)}
                       placeholder="Applies to the whole voucher"
@@ -2315,16 +2391,13 @@ export default function ReceiptsPage() {
                           // "Editing" is the line currently pulled into the entry strip — no second
                           // piece of state to drift out of step with the form. "Selected" is the
                           // row a click picked for Edit/Edit Row (standard §5).
-                          const isEndorsedLine = line.settlement_id != null;
+                          const isEndorsedLine = line.settlement_id != null || line.endorse_to_ba_id != null;
                           const rowKey = lineKey(line);
                           const isSelected = rowKey != null && rowKey === selectedLineKey;
-                          const isEditing = isEndorsedLine
-                            ? mode === 'edit' && docKind === 'SETTLEMENT' && receiptId === line.settlement_id
-                            : mode === 'edit' && docKind === 'RECEIPT'
-                              && entryIsDraft && line.draft_id != null && receiptId === line.draft_id;
+                          const isEditing = rowKey != null && rowKey === editingKey;
                           return (
                           <tr
-                            key={isEndorsedLine ? `settlement_${line.settlement_id}` : (line.receipt_id ?? `draft_${line.draft_id}`)}
+                            key={rowKey ?? `receipt_${line.receipt_id}`}
                             ref={el => { const k = lineKey(line); if (k != null) rowRefs.current[k] = el; }}
                             // A click only SELECTS the row (what Edit/Edit Row act on next), in every
                             // state, and never loads it for editing (standard §5, superseding
@@ -2393,14 +2466,10 @@ export default function ReceiptsPage() {
                                         setDeleteTarget({ kind: 'voucher', id: voucher.voucher_id, amount: Number(voucher.total_amount) });
                                         return;
                                       }
-                                      setDeleteTarget(isEndorsedLine
-                                        ? { kind: 'settlement', id: line.settlement_id as number, amount: Number(line.amount) }
-                                        : line.draft_id != null
-                                        ? { kind: 'draft', id: line.draft_id, amount: Number(line.amount) }
-                                        : { kind: 'receipt', id: line.receipt_id as number, amount: Number(line.amount) });
+                                      removeLine(line);
                                     }}
                                     editTitle="Pull this entry back into the form to correct it"
-                                    deleteTitle="Delete this entry (asks for your password)"
+                                    deleteTitle="Remove this entry — press Save or Done to keep the change"
                                     editDisabledTitle="Select Detail to edit voucher entries"
                                     deleteDisabledTitle="Select Detail to delete voucher entries"
                                   />
@@ -2420,25 +2489,25 @@ export default function ReceiptsPage() {
                   <div className="flex flex-wrap items-end justify-end gap-3 mt-3 pt-3 border-t shrink-0" style={{ borderColor: 'var(--border-table)' }}>
                     <div className="flex flex-col gap-0.5">
                       <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cheque</label>
-                      <input type="text" value={formatCurrency(Number(voucher?.total_cheque ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                      <input type="text" value={formatCurrency(Number(lineTotals.cheque))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
                     </div>
                     <div className="flex flex-col gap-0.5">
                       <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Online</label>
-                      <input type="text" value={formatCurrency(Number(voucher?.total_online ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                      <input type="text" value={formatCurrency(Number(lineTotals.online))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
                     </div>
                     <div className="flex flex-col gap-0.5">
                       <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Cash</label>
-                      <input type="text" value={formatCurrency(Number(voucher?.total_cash ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                      <input type="text" value={formatCurrency(Number(lineTotals.cash))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
                     </div>
                     <div className="flex flex-col gap-0.5">
                       <label className="text-[10px] font-semibold uppercase tracking-wider text-violet-700">Total Endorsed</label>
-                      <input type="text" value={formatCurrency(Number(voucher?.total_endorsed ?? 0))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
+                      <input type="text" value={formatCurrency(Number(lineTotals.endorsed))} disabled className="soleria-input soleria-input-compact bg-gray-100 text-gray-700 text-right font-mono font-semibold" style={{ width: '120px' }} />
                     </div>
                     <div className="flex flex-col gap-0.5">
                       <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Total Amount</label>
                       <input
                         type="text"
-                        value={formatCurrency(Number(voucher?.total_amount ?? 0))}
+                        value={formatCurrency(Number(lineTotals.total))}
                         disabled
                         className="soleria-input soleria-input-compact text-right font-mono font-bold"
                         // Light bar, not the dark navy fill — matching the same fix applied to
