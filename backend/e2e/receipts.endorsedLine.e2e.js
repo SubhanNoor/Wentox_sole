@@ -1,8 +1,7 @@
 // Receipts (Jamma) — an endorsed entry is a line of its voucher (per the user, 2026-10-05). On the
 // real screen: the endorsed line shows in the voucher's detail rows marked "Endorsed → <account>",
-// Total Endorsed carries it, a row's Delete only takes it off the voucher on screen until Done saves
-// the voucher (per the user, 2026-11-11 — like the Journal Voucher), Post posts it TOGETHER with
-// the ordinary lines — it used to post alone and
+// Total Endorsed carries it, deleting one goes through the password prompt (the server now checks
+// that password too), Post posts it TOGETHER with the ordinary lines — it used to post alone and
 // leave the ordinary lines behind, looking erased — and Overall Records shows it on its voucher's
 // row rather than as a separate settlement.
 'use strict';
@@ -61,23 +60,21 @@ test('Receipts: an endorsed entry shows in the voucher and posts with its other 
   const totalEndorsed = page.locator('label', { hasText: 'Total Endorsed' }).locator('xpath=following-sibling::input');
   assert.match(await totalEndorsed.inputValue(), /350/);
 
-  // Remove one endorsed line with its row's Delete: gone from the grid at once, from the database
-  // only when Done saves the voucher.
+  // Delete one endorsed line through its row's Delete and the password prompt.
   const deleteRow = page.locator('tbody tr', { hasText: 'E2E-DELETE-ME' });
-  await deleteRow.locator('button[title="Remove this entry — press Save or Done to keep the change"]').click();
-  assert.equal(await h.eventually(() => deleteRow.count(), 0), 0, 'the removed line must leave the grid');
-  const settlementCount = async () => (await query(
+  await deleteRow.locator('button[title="Delete this entry (asks for your password)"]').click();
+  await page.locator('input[type="password"]').fill('admin123');
+  await page.locator('input[type="password"]').press('Enter');
+  const remaining = await h.eventually(async () => (await query(
     'SELECT COUNT(*) AS n FROM dbo.settlements WHERE settlement_id = @id', { id: toDelete.settlement_id },
-  )).recordset[0].n;
-  assert.equal(await settlementCount(), 1, 'nothing is written before Save/Done');
+  )).recordset[0].n, 0, 10000);
+  assert.equal(remaining, 0, 'the endorsed line must be deleted once the password is confirmed');
+  assert.equal(await h.eventually(() => deleteRow.count(), 0), 0, 'the deleted line must leave the grid');
   const totalAfterDelete = async () => {
     const value = await totalEndorsed.inputValue();
     return /300/.test(value) && !/350/.test(value) ? true : value;
   };
   assert.equal(await h.eventually(totalAfterDelete, true), true, 'Total Endorsed must drop to 300');
-
-  await h.click(page, 'Done');
-  assert.equal(await h.eventually(settlementCount, 0, 10000), 0, 'Done must delete the removed endorsed line');
 
   await h.click(page, 'Post');
   const posted = await h.eventually(
