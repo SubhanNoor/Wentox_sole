@@ -136,7 +136,8 @@ test('Current Stock: the Full Report colour matrix is the report', async (t) => 
 
   // The other tabs show their printed document too...
   await page.getByRole('button', { name: 'Product Ledger', exact: true }).click();
-  await page.locator('[data-live-report] h2', { hasText: 'PRODUCT MOVEMENT LEDGER' }).waitFor();
+  // The Reports one (ProductLedgerContent, per the user 2026-11-08), so its heading too.
+  await page.locator('h2', { hasText: 'PRODUCT LEDGER REPORT' }).first().waitFor();
   await page.getByRole('button', { name: 'Daily Production', exact: true }).click();
   await page.locator('[data-live-report] h2', { hasText: 'DAILY PRODUCTION LOG' }).waitFor();
   // ...except Material Stock, which keeps its own table for the parked "−" (reduce stock) button.

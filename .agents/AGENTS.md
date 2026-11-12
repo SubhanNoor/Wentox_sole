@@ -1,4 +1,4 @@
-****# UI/UX Frontend Design System Guidelines
+# UI/UX Frontend Design System Guidelines
 
 ## 1. Card Components Standard
 

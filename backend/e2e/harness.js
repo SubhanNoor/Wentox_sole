@@ -93,7 +93,12 @@ async function login(win) {
 // A top menu item (lib/menu.ts) — the group opens on hover (MenuBar.tsx; a click only toggles it).
 // The dropdown is drawn in a window of its own (backend windowManager.js#ensureMenuPopup), so the
 // item is found there, not in the main window.
+// The mouse is moved off the bar first: after a pick it is still on the menu button in this page's
+// eyes (the click happened in the popup window), so a second hover on the same button would be no
+// move at all and the menu would never open. The hidden popup still holds the last menu it drew, so
+// the item is only taken once the popup is actually showing.
 async function menuItem(win, group, label) {
+  await win.mouse.move(0, 0);
   await win.getByText(group, { exact: true }).hover();
   const app = win.context();
   let popup;
@@ -102,6 +107,7 @@ async function menuItem(win, group, label) {
     if (!popup) await win.waitForTimeout(100);
   }
   if (!popup) throw new Error('menu popup window not found');
+  await popup.waitForFunction(() => document.visibilityState === 'visible', null, { timeout: 10000 });
   const item = popup.getByText(label, { exact: true });
   await item.waitFor();
   return item;

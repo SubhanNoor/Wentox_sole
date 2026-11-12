@@ -1,5 +1,7 @@
-// Product Ledger, as the client asked for it (2026-10-12): one line per product+colour with
-// Opening / In / Out / Balance, a Detailed view with a running balance, and Date Range / This Week period radios.
+// Product Ledger, as the client asked for it (2026-10-12, columns 2026-11-08): one line per
+// product+colour with Opening / In / Return / Total Stock / Out / Balance, a Detailed view with a
+// running balance, and Date Range / This Week period radios. A manual adjustment is stock entered
+// straight onto stock, so it lands in In (reports.service.js#movementBucket), a reduction as a negative.
 'use strict';
 
 const test = require('node:test');
@@ -48,11 +50,17 @@ test('Product Ledger: summary line, detailed running balance and This Week', asy
   await dates.nth(0).fill('2026-07-01');
   await dates.nth(1).fill('2026-07-31');
 
-  // Summary: one line — code, article, colour, vendor, Opening 500, In 240, Out (480), Balance 260.
+  // Summary: one line — code, article, colour, vendor, then Opening 500, In 240 − 480 = (240), no
+  // Return, Total Stock 260, no Out, Balance 260. Waits for the July range to apply: the page
+  // first loads its default (last three months), where all three movements are opening stock.
   const line = page.locator('tr', { has: page.getByText(product.name, { exact: true }) }).first();
   await line.waitFor();
-  const cells = (await line.locator('td').allInnerTexts()).map((s) => s.trim());
-  assert.deepEqual(cells.slice(4), ['500', '240', '(480)', '260'], `summary line: ${cells.join(' | ')}`);
+  const summary = async () => (await line.locator('td').allInnerTexts()).map((s) => s.trim()).slice(4);
+  const expected = ['500', '(240)', '-', '260', '-', '260'];
+  assert.deepEqual(await h.eventually(async () => {
+    const got = await summary();
+    return JSON.stringify(got) === JSON.stringify(expected) ? expected : got;
+  }, expected, 10000), expected, 'summary line');
 
   // Detailed: Opening Stock row, then each movement with its running balance.
   await page.getByRole('button', { name: 'Detailed', exact: true }).click();
@@ -61,7 +69,8 @@ test('Product Ledger: summary line, detailed running balance and This Week', asy
     rows.map((r) => [...r.querySelectorAll('td')].map((td) => td.innerText.trim())));
   const opening = balances.find((c) => c.includes('Opening Stock'));
   assert.equal(opening.at(-1), '500');
-  const movementBalances = balances.filter((c) => c.length === 6 && /^#\d+$/.test(c[2])).map((c) => c[5]);
+  // Movement rows: Date, Type, #id, In, Return, Out, Balance.
+  const movementBalances = balances.filter((c) => c.length === 7 && /^#\d+$/.test(c[2])).map((c) => c[6]);
   assert.deepEqual(movementBalances, ['740', '260']);
 
   // This Week radio: Monday of the current week to today.
