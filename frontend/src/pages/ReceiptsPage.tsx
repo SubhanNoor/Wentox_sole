@@ -462,7 +462,12 @@ export default function ReceiptsPage() {
   );
   // Done on an EMPTY entry row with entries already saved = "finished with this voucher": it goes
   // read-only, like the Journal Voucher's Done (per the user, 2026-11-11). Save has nothing to do then.
-  const canFinishVoucher = !isViewMode && mode !== 'edit' && !baId && amount <= 0 && (voucher?.lines?.length ?? 0) > 0;
+  // The same "untouched row" test handleDone uses (entryRowUntouched), plus Endorse unticked (an
+  // endorsed Done always saves an endorsement): since Post needs the voucher read-only (2026-11-13),
+  // a Done that looks finishable but then says "select an account" would leave Post greyed out.
+  const canFinishVoucher = !isViewMode && mode !== 'edit' && !isEndorsed && !baId && amount <= 0
+    && !remarks.trim() && !details.trim() && !chequeNo.trim() && !chequeDate
+    && (voucher?.lines?.length ?? 0) > 0;
 
   // A receipt can name ANY business account, not just a customer's (migration 014) — the same
   // freedom the Expenses/Naam side has always had.
@@ -1675,34 +1680,37 @@ export default function ReceiptsPage() {
             prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}
             next={{ onClick: handleNavNext, disabled: !canNavNext }}
             last={{ onClick: handleNavLast, disabled: navList.length === 0 }}
-            // Post acts on the SAVED voucher — not while an edit is half-done on screen (as on the JV).
-            print={{ onClick: () => window.print(), disabled: !voucher }}
+            // Post, Un Post, Print, PDF and Excel act on the SAVED voucher, read-only — exactly the JV's
+            // rule (per the user, 2026-11-13). After the last entry, Done on the empty entry row makes
+            // the voucher read-only (canFinishVoucher), then Post. Before, Post was live with the entry
+            // row open, so a half-typed entry was silently dropped by posting.
+            print={{ onClick: () => window.print(), disabled: !isViewMode || !voucher }}
             find={{ onClick: () => setIsFindOpen(true) }}
             unpost={{
               onClick: () => { if (isSettlementDoc) { handleUnpost(); return; } handleUnpostVoucher(); },
               disabled: isSettlementDoc
                 ? (!isViewMode || !isPosted)
-                : (!voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy),
+                : (!isViewMode || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy),
               title: isSettlementDoc ? 'Un Post Endorsement' : 'Unpost Voucher',
             }}
             post={{
               onClick: async () => { if (isSettlementDoc) { await handlePost(); return; } await handlePostVoucher(); focusNewButton(); },
               disabled: isSettlementDoc
                 ? (!isViewMode || isPosted)
-                : (!voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy || mode === 'edit'),
+                : (!isViewMode || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy),
               title: isSettlementDoc ? 'Post Endorsement' : 'Post Voucher',
             }}
             exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
             saveAndPost={{ disabled: true, title: 'Not used here — each entry is saved as you add it; press Post when the voucher is complete' }}
             postAll={{ onClick: async () => { await handlePostAllVouchers(); focusNewButton(); }, disabled: navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted', title: `Post All (${navUnpostedVouchers.length})` }}
-            pdf={{ onClick: () => window.print(), disabled: !voucher, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
+            pdf={{ onClick: () => window.print(), disabled: !isViewMode || !voucher, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
             excel={{
               onClick: () => exportRowsToExcel(
                 `receipts-voucher-${voucher?.voucher_no ?? ''}`,
                 ['Account', 'Details', 'Amount'],
                 voucherLines.map(l => [l.account_name ?? '', l.details ?? '', Number(l.amount)]),
               ),
-              disabled: !voucher || voucherLines.length === 0,
+              disabled: !isViewMode || !voucher || voucherLines.length === 0,
               title: 'Export Excel',
             }}
           >

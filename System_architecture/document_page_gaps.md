@@ -43,6 +43,7 @@
 | — | Post always clears, keeping the date | SB/SR/PU kept an opened document; PR never cleared | All pages clear |
 | — | Un Post lands read-only | JV only (others dropped into edit) | All pages |
 | — | Sale Return auto-opens the newest draft | **Bug**: never auto-opened in a shop with no transport addas | Fixed |
+| 21 | Post / Un Post / Print / PDF / Excel only on a read-only document | RC/EX: live with the entry row open (Post dropped a half-typed entry) | 2026-11-13: RC/EX follow the JV — Done on the empty entry row, then Post (`e2e/receiptsPayments.buttonStates.e2e.js`) |
 
 ## Tests
 

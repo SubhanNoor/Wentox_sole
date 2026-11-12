@@ -1266,22 +1266,25 @@ export default function ExpensesPage() {
             prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}
             next={{ onClick: handleNavNext, disabled: !canNavNext }}
             last={{ onClick: handleNavLast, disabled: navList.length === 0 }}
-            // Post acts on the SAVED voucher — not while an edit is half-done on screen (as on the JV).
-            print={{ onClick: () => window.print(), disabled: !voucher }}
+            // Post, Un Post, Print, PDF and Excel act on the SAVED voucher, read-only — exactly the JV's
+            // rule (per the user, 2026-11-13). After the last entry, Done on the empty entry row makes
+            // the voucher read-only (canFinishVoucher), then Post. Before, Post was live with the entry
+            // row open, so a half-typed entry was silently dropped by posting.
+            print={{ onClick: () => window.print(), disabled: !isViewMode || !voucher }}
             find={{ onClick: () => setIsFindOpen(true) }}
-            unpost={{ onClick: handleUnpostVoucher, disabled: !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy, title: 'Unpost Voucher' }}
-            post={{ onClick: async () => { await handlePostVoucher(); focusNewButton(); }, disabled: !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy || mode === 'edit', title: 'Post Voucher' }}
+            unpost={{ onClick: handleUnpostVoucher, disabled: !isViewMode || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy, title: 'Unpost Voucher' }}
+            post={{ onClick: async () => { await handlePostVoucher(); focusNewButton(); }, disabled: !isViewMode || !voucher || voucherLines.length === 0 || voucher.status === 'POSTED' || voucherBusy, title: 'Post Voucher' }}
             exit={{ onClick: async () => { if (!(await api.closeThisWindow())) dispatch({ type: 'NAVIGATE', page: 'home' }); } }}
             saveAndPost={{ disabled: true, title: 'Not used here — each entry is saved as you add it; press Post when the voucher is complete' }}
             postAll={{ onClick: async () => { await handlePostAllVouchers(); focusNewButton(); }, disabled: navUnpostedVouchers.length === 0 || postAllVouchersBusy || navFilter === 'posted', title: `Post All (${navUnpostedVouchers.length})` }}
-            pdf={{ onClick: () => window.print(), disabled: !voucher, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
+            pdf={{ onClick: () => window.print(), disabled: !isViewMode || !voucher, title: 'Export PDF — choose "Save as PDF" in the print dialog' }}
             excel={{
               onClick: () => exportRowsToExcel(
                 `expenses-voucher-${voucher?.voucher_no ?? ''}`,
                 ['Account', 'Details', 'Amount'],
                 voucherLines.map(l => [l.account_name ?? '', l.details ?? '', Number(l.amount)]),
               ),
-              disabled: !voucher || voucherLines.length === 0,
+              disabled: !isViewMode || !voucher || voucherLines.length === 0,
               title: 'Export Excel',
             }}
           />
