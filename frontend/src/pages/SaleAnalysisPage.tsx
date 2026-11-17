@@ -16,6 +16,7 @@ import LiveReportDocument from '@/components/reports/LiveReportDocument';
 import { REPORT_COLORS, signedColor } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -326,7 +327,8 @@ export function SaleAnalysisContent() {
         </div>
 
         {/* Filter Bar - data-no-print */}
-        <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+        <StickyFilter>
+          <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
               <button
@@ -399,6 +401,7 @@ export function SaleAnalysisContent() {
             </button>
           </div>
         </div>
+        </StickyFilter>
 
         {/* The report itself: the same document the print preview prints (Product Ledger layout,
             per the user 2026-10-14). Region/City groups are listed fully expanded, as on paper. */}

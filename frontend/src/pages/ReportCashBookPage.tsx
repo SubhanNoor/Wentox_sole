@@ -14,6 +14,7 @@ import LiveReportDocument from '@/components/reports/LiveReportDocument';
 import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -384,7 +385,8 @@ export function ReportCashBookContent() {
         </div>
 
         {/* Selection Bar - data-no-print */}
-        <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+        <StickyFilter>
+          <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-4 flex-1 min-w-[290px]">
             <div className="relative flex-1 min-w-[240px]">
               <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Particulars:</span>
@@ -464,6 +466,7 @@ export function ReportCashBookContent() {
             </button>
           </div>
         </div>
+        </StickyFilter>
 
         {/* The report: the same document the print preview prints (Product Ledger layout, per the user 2026-10-14). */}
         <LiveReportDocument loading={loading && !hasLoadedOnce}>

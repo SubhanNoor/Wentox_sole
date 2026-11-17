@@ -10,6 +10,7 @@ import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 type QuickFilter = 'all' | 'no-adda' | 'no-bilty' | 'no-gp' | 'complete';
 
@@ -201,7 +202,8 @@ export default function SearchCustomerPage() {
         {errorMsg && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>}
 
         {/* Filter Toolbar */}
-        <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs flex flex-col gap-4">
+        <StickyFilter>
+          <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs flex flex-col gap-4">
           <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2 border-b pb-3">
             <Users size={18} className="text-[#B08D57]" /> Search a Customer's Sale Bills
           </h3>
@@ -271,6 +273,7 @@ export default function SearchCustomerPage() {
             ))}
           </div>
         </div>
+        </StickyFilter>
 
         {!customerId ? (
           <div className="card-white bg-white border border-slate-200/80 rounded-2xl p-12 text-center text-slate-400 text-sm">

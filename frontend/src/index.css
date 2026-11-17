@@ -741,6 +741,34 @@ select option:hover {
   pointer-events: none;
 }
 
+/* Pinned filter panel (components/StickyFilter.tsx): the panel stays at the top of the scrolling
+   <main> while only the records move. display:flow-root keeps the panel's own bottom margin inside
+   the pinned box so rows never show through the gap. */
+.sticky-filter {
+  position: sticky;
+  top: calc(-1 * var(--sticky-pad, 0px));
+  padding-top: var(--sticky-pad, 0px);
+  z-index: 30;
+  display: flow-root;
+  background: var(--app-bg);
+}
+
+/* While a pinned panel is on the page, pin each table's column headings right under it. Sticky only
+   works if no ancestor between the th and <main> is a scroll container, so the card wrappers that
+   used overflow-hidden / overflow-x-auto (which make one) switch to overflow:clip — same look, but
+   not a scroll container. Tables inside a fixed modal are left alone. */
+.app-main.has-sticky-filter table:not(.fixed *) thead th {
+  position: sticky;
+  top: var(--sticky-filter-h, 0px);
+  z-index: 10;
+}
+.app-main.has-sticky-filter table:not(.excel-print-table):not(.fixed *) thead th {
+  background-color: #f8fafc;
+}
+.app-main.has-sticky-filter :is(.overflow-hidden, .overflow-x-auto, .card-white):has(table):not(.fixed *):not(.fixed) {
+  overflow: clip;
+}
+
 /* Print styles */
 @media print {
   /* The screen's -webkit-text-stroke bold-thickening (see the label rule above) is deliberately

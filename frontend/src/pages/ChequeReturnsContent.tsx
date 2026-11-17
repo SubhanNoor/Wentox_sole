@@ -8,6 +8,7 @@ import * as api from '@/lib/api';
 import { useInFlight } from '@/hooks/useInFlight';
 import type { ChequeAllocationRow, ChequeDispositionType, IssuedChequeRow } from '@/lib/api';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 const DISPOSITION_LABELS: Record<Exclude<ChequeDispositionType, 'DEPOSIT'>, string> = {
   VENDOR_PAYMENT: 'Paid to Vendor',
@@ -178,7 +179,8 @@ export function ChequeReturnsContent() {
         <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
       )}
 
-      <div
+      <StickyFilter>
+        <div
         className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white"
         style={{ borderColor: 'var(--border-color)' }}
         data-no-print
@@ -202,6 +204,7 @@ export function ChequeReturnsContent() {
           <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
         </div>
       </div>
+      </StickyFilter>
 
       <div className="card-white p-6 md:p-8 bg-white border">
         <div className="overflow-x-auto">

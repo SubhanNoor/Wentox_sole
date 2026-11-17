@@ -15,6 +15,7 @@ import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { getWindowParam, shouldAutoPreview, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 // Date range calculation helpers
 const getWeekRange = (dateStr: string) => {
@@ -619,7 +620,8 @@ export default function ReportStockPage() {
         {/* On-screen View - hidden on print */}
         <div data-no-print className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
           {/* Search and Filters */}
-          <div className="p-3 rounded-lg border mb-4 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
+          <StickyFilter>
+            <div className="p-3 rounded-lg border mb-4 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
             <div className="flex flex-wrap items-center justify-between gap-2.5">
               {/* Left Side: Search */}
               <div className="relative w-56 md:w-64 shrink-0">
@@ -775,6 +777,7 @@ export default function ReportStockPage() {
               </div>
             )}
           </div>
+          </StickyFilter>
 
           {/* The report: the same document the print preview prints (Product Ledger layout, per the
               user 2026-10-14). Material Stock keeps its own table for now: its "−" (reduce stock)

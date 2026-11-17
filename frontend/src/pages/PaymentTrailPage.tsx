@@ -13,6 +13,7 @@ import LiveReportDocument from '@/components/reports/LiveReportDocument';
 import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 export function PaymentTrailContent() {
   // Re-runs the loads below when another window saves something (live update, 2026-10-15).
@@ -121,7 +122,8 @@ export function PaymentTrailContent() {
       <div className="mx-auto" style={{ maxWidth: 900 }}>
 
         {/* Filter Bar - data-no-print */}
-        <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+        <StickyFilter>
+          <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
@@ -143,6 +145,7 @@ export function PaymentTrailContent() {
             </button>
           </div>
         </div>
+        </StickyFilter>
 
         {/* The report: the same document the print preview prints (Product Ledger layout, per the user 2026-10-14). */}
         <LiveReportDocument loading={loading && !hasLoadedOnce}>

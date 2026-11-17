@@ -10,6 +10,7 @@ import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 interface FindTabProps {
   onEditBill: (bill: SaleBillRow) => void;
@@ -291,6 +292,7 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
       {/* Screen-only UI Container */}
       <div className="mx-auto print:hidden px-2" style={{ maxWidth: 1750 }}>
 
+        <StickyFilter>
         {/* Search Filters Card */}
         <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
@@ -472,6 +474,8 @@ export default function FindTab({ onEditBill, onPrintBill }: FindTabProps) {
             </div>
           </div>
         </div>
+
+        </StickyFilter>
 
         {/* Results Table Card */}
         <div className="card-white bg-white border border-slate-200 rounded-xl shadow-sm">

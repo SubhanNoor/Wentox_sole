@@ -5,6 +5,7 @@ import type { SaleBillRow, CustomerRow, SubCustomerRow, AddaRow, CityRow } from 
 import { formatDate, formatCartons } from '@/lib/utils';
 import { Calendar, Search, ArrowLeft, FileText, Edit2, Printer, ChevronDown, Check, MapPin } from 'lucide-react';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 interface MonthlyTabProps {
   onEditBill: (bill: SaleBillRow) => void;
@@ -242,7 +243,8 @@ export default function MonthlyTab({ onEditBill, onPrintBill }: MonthlyTabProps)
   return (
     <div className="mx-auto px-2" style={{ maxWidth: 1750 }}>
       {/* Filter Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
+      <StickyFilter>
+        <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex items-center gap-3 flex-1">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3.5 top-2.5 text-slate-400" size={18} />
@@ -317,6 +319,7 @@ export default function MonthlyTab({ onEditBill, onPrintBill }: MonthlyTabProps)
           </div>
         </div>
       </div>
+      </StickyFilter>
 
       {/* Customer Cards Grid */}
       {/* RJ-05 pattern: customer records as table rows, not cards — the same treatment the Receipts

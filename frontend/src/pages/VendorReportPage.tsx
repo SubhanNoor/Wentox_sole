@@ -15,6 +15,7 @@ import LiveReportDocument from '@/components/reports/LiveReportDocument';
 import { REPORT_COLORS, signedColor } from '@/components/reports/reportColors';
 import { getWindowParam } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 
 type Loaded = { key: string; groupRows: VendorReportRow[]; ledger: { opening_balance: number; rows: LedgerRow[] } | null; error: string | null };
@@ -243,7 +244,8 @@ export function VendorReportContent() {
   return (
     <div className="mx-auto" style={{ maxWidth: 1100 }}>
       {/* Filter Bar - data-no-print */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+      <StickyFilter>
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
         <div className="flex flex-wrap items-center gap-3">
           <div className="w-64">
             <SearchableSelect
@@ -274,6 +276,7 @@ export function VendorReportContent() {
           <Eye size={14} /> Show Print Preview
         </button>
       </div>
+      </StickyFilter>
 
       {loaded?.error && <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{loaded.error}</div>}
 

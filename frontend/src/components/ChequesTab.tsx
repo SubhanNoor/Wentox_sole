@@ -13,6 +13,7 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 const STATUS_STYLES: Record<ChequeStatus, string> = {
   PENDING: 'bg-amber-50 text-amber-800 border-amber-200',
@@ -417,7 +418,8 @@ export default function ChequesTab() {
       )}
 
       {/* Filter bar */}
-      <div
+      <StickyFilter>
+        <div
         className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white"
         style={{ borderColor: 'var(--border-color)' }}
         data-no-print
@@ -464,6 +466,7 @@ export default function ChequesTab() {
           </button>
         </div>
       </div>
+      </StickyFilter>
 
       <div className="card-white p-6 md:p-8 bg-white border">
         <div className="flex items-center justify-between border-b pb-4 mb-6">

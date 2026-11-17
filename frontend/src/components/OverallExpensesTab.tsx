@@ -5,6 +5,7 @@ import type { ExpenseRow, BusinessAccountRow, ExpenseVoucherRow } from '@/lib/ap
 import { formatDate } from '@/lib/utils';
 import { Calendar, Search, ArrowLeft, FileText, DollarSign, Landmark, CreditCard, ChevronDown, Check, Undo2 } from 'lucide-react';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 function isChequeMode(mode: ExpenseRow['payment_mode']): boolean {
   return mode === 'CHEQUE_ENDORSED' || mode === 'CHEQUE_ISSUED';
@@ -274,7 +275,8 @@ export default function OverallExpensesTab({ onVoucherUnposted }: OverallExpense
         <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4">{errorMsg}</div>
       )}
       {/* Filter Toolbar Standard */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
+      <StickyFilter>
+        <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3.5 top-2.5 text-slate-400" size={16} />
@@ -390,6 +392,7 @@ export default function OverallExpensesTab({ onVoucherUnposted }: OverallExpense
           {overallExpenses.length} Expense Records
         </div>
       </div>
+      </StickyFilter>
 
       {/* PN-01/RJ-05: voucher records as table rows — grouped by VOUCHER, not account (corrected
           per the user 2026-08-26, same fix as Receipts): Account column removed, C.Book No/Date/

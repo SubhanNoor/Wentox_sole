@@ -11,6 +11,7 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 import { closePreviewWindow } from '@/components/reports/previewWindow';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   PRODUCTION: 'Production',
@@ -385,7 +386,8 @@ export default function ProductLedgerContent() {
   return (
     <div className="mx-auto" style={{ maxWidth: 1100 }}>
       {/* Filter Bar - data-no-print */}
-      <div className="flex flex-col gap-4 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+      <StickyFilter>
+        <div className="flex flex-col gap-4 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
         <div className="flex flex-wrap items-center gap-3">
           <input
             ref={searchRef}
@@ -470,6 +472,7 @@ export default function ProductLedgerContent() {
           </button>
         </div>
       </div>
+      </StickyFilter>
 
       <div className="card-white p-6 md:p-8 bg-white border">
         {loading && !hasLoadedOnce ? (

@@ -14,6 +14,7 @@ import LiveReportDocument from '@/components/reports/LiveReportDocument';
 import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 type AccountGroupType = 'all' | 'customer' | 'vendor' | 'employee' | 'bank' | 'chart_account' | 'business_account';
 
@@ -485,7 +486,8 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
       {!selectedAccount ? (
         <div>
           {/* Top Filter Container with Searchable Select & Action Buttons */}
-          <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs" data-no-print>
+          <StickyFilter>
+            <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs" data-no-print>
 
             {/* ROW 1: Search Input, SearchableSelect Dropdown, As On Date, & Actions */}
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -572,6 +574,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
               <span className="ml-2"><SkipZeroToggle value={skipZero} onChange={setSkipZero} /></span>
             </div>
           </div>
+          </StickyFilter>
 
           {/* Main Balances Table */}
           {!reportVisible ? (
@@ -645,7 +648,8 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
           </div>
 
           {/* Date Filter Bar */}
-          <div className="p-3 rounded-lg border mb-6 bg-white shadow-sm flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
+          <StickyFilter>
+            <div className="p-3 rounded-lg border mb-6 bg-white shadow-sm flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
             <div className="flex flex-wrap items-center gap-4">
               <div className="flex items-center gap-2">
                 <label className="text-xs font-semibold text-slate-500 uppercase">From Date:</label>
@@ -672,6 +676,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
               <span className="text-[#B08D57] font-bold">{formatCurrency(ledger?.closing_balance || 0)}</span>
             </div>
           </div>
+          </StickyFilter>
 
           {/* The ledger: the same document the print preview prints. */}
           <LiveReportDocument loading={!ledger && ledgerLoading}>

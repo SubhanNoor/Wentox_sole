@@ -15,6 +15,7 @@ import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam } from '@/lib/windowParams';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 interface KhaataRow {
   date: string;
@@ -377,7 +378,8 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
     <>
       <div className="mx-auto" style={{ maxWidth: 1100 }}>
         {/* Filter Bar - data-no-print */}
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+        <StickyFilter>
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
           <div className="flex flex-wrap items-center gap-3">
             {showingStatement && (
               <button
@@ -428,6 +430,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
             <Eye size={14} /> Show Print Preview
           </button>
         </div>
+        </StickyFilter>
 
         {showingStatement ? (
           <LiveReportDocument loading={!loadedLedger || !directory}>

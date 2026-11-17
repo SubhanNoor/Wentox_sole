@@ -11,6 +11,7 @@ import wentoxLogo from '@/assets/wentox_logo.png';
 import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreviewModal';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 type EntityType = 'customer' | 'vendor' | 'employee' | 'subcustomer' | 'account' | 'bank';
 
@@ -315,7 +316,8 @@ export default function OverallSearchPage() {
             </div>
 
             {/* Filter & Search Bar */}
-            <div className="p-4 rounded-xl border mb-6 bg-white shadow-2xs flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
+            <StickyFilter>
+              <div className="p-4 rounded-xl border mb-6 bg-white shadow-2xs flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
               <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
                 <div className="relative min-w-[260px] max-w-md flex-1">
                   <Search className="absolute left-3.5 top-2.5 text-slate-400" size={16} />
@@ -348,6 +350,7 @@ export default function OverallSearchPage() {
                 </div>
               </div>
             </div>
+            </StickyFilter>
 
             {/* Entity Directory Row List (shared DataListTable template) */}
             <div className="card-white overflow-hidden">

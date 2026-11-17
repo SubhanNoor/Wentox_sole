@@ -12,6 +12,7 @@ import LiveReportDocument from '@/components/reports/LiveReportDocument';
 import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 // Every event a cheque's life can produce — a small fixed enum, so distinct colors per event
 // (same spirit as ChequesTab.tsx's own STATUS_STYLES) don't run into the "badge color from
@@ -352,7 +353,8 @@ export function ChequeLedgerContent() {
       {errorMsg && (
         <div className="banner-error rounded-lg px-4 py-3 text-sm mb-4" data-no-print>{errorMsg}</div>
       )}
-      <div
+      <StickyFilter>
+        <div
         className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white"
         style={{ borderColor: 'var(--border-color)' }}
         data-no-print
@@ -390,6 +392,7 @@ export function ChequeLedgerContent() {
           <Eye size={14} /> Show Print Preview
         </button>
       </div>
+      </StickyFilter>
 
       {/* The report: the same document the print preview prints (Product Ledger layout, per the user 2026-10-14). */}
       <LiveReportDocument loading={loading && !hasLoadedOnce}>

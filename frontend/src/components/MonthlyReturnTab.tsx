@@ -5,6 +5,7 @@ import type { SaleReturnRow, CustomerRow, SubCustomerRow, CityRow } from '@/lib/
 import { formatDate, formatCartons } from '@/lib/utils';
 import { Calendar, Search, ArrowLeft, FileText, Printer, ChevronDown, Check, MapPin, Eye } from 'lucide-react';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import StickyFilter from '@/components/StickyFilter';
 
 interface MonthlyReturnTabProps {
   onOpenReturn: (ret: SaleReturnRow) => void;
@@ -246,7 +247,8 @@ export default function MonthlyReturnTab({ onOpenReturn, onPrintReturn }: Monthl
   return (
     <div className="mx-auto px-2" style={{ maxWidth: 1750 }}>
       {/* Filter Toolbar */}
-      <div className="w-full flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
+      <StickyFilter>
+        <div className="w-full flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white shadow-2xs" style={{ borderColor: 'var(--border-color)' }}>
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3.5 top-2.5 text-slate-400" size={17} />
           <input
@@ -317,6 +319,7 @@ export default function MonthlyReturnTab({ onOpenReturn, onPrintReturn }: Monthl
           </div>
         </div>
       </div>
+      </StickyFilter>
 
       {/* Customer Cards Grid */}
       {/* RJ-05 pattern: customer records as table rows, not cards — the same treatment the Receipts
