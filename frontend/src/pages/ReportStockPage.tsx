@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
 import { Search, X, Eye } from 'lucide-react';
@@ -151,6 +151,11 @@ export default function ReportStockPage() {
   const [prodUnit, setProdUnit] = useState<QtyUnit>(() => (getWindowParam('unit') as QtyUnit) || 'pairs');
 
   const categoryIdParam = selectedCategory !== 'all' ? Number(selectedCategory) : undefined;
+
+  // The cursor lands in the search box on open and on every tab switch, ready to type (per the
+  // user, 2026-11-23: every report opens with its search bar focused).
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, [activeStockTab]);
 
   // ── Current Stock ──
   const loadStock = useCallback(async () => {
@@ -640,6 +645,7 @@ export default function ReportStockPage() {
               <div className="relative w-56 md:w-64 shrink-0">
                 <Search className="absolute left-3 top-2 text-slate-400" size={16} />
                 <input
+                  ref={searchRef}
                   type="text"
                   placeholder={activeStockTab === 'current' ? 'Search article, category or color...' : 'Search by article code or name...'}
                   value={searchQuery}

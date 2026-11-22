@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
@@ -373,6 +373,12 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   );
 
   const showingStatement = accountBaId != null;
+  // The cursor lands in the search box whenever the accounts list is showing — on open and on
+  // "Back to list" (per the user, 2026-11-23), same as Overall Trail's list view.
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!showingStatement) requestAnimationFrame(() => searchRef.current?.focus());
+  }, [showingStatement]);
 
   return (
     <>
@@ -407,6 +413,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
             {!showingStatement && (
               <div className="relative w-[520px] max-w-full">
                 <input
+                  ref={searchRef}
                   type="text"
                   placeholder={`Search code, name, main account${isAllScope ? ', category' : ''} or city...`}
                   value={accountSearch}

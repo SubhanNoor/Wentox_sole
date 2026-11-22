@@ -700,16 +700,20 @@ Region Wise groups by region first, then breaks each region down by customer.
 |---|---|
 | Total Sales Amount | Gross total of all sale bills |
 | Total Cartons | Total cartons sold |
-| **Commission** | **Total commission given at payment time** — from Receipts, **not** sale-time discounts |
+| **Commission** | **Receipt commission + JV commission** — **not** sale-time discounts |
 | Sale Return | Total value of returns (0 if none) |
 | Net Sales | Total Sales − Commission − Sale Return |
 | Payment | Amount paid by customers |
 
 > The Commission column is the one place this report is easy to get wrong. It sums
-> `receipts.commission`. Sale-time D% and invoice discounts are already inside each bill's net
-> value and are **not** counted again here.
+> `receipts.commission` **plus JV commission** (per the user, 2026-11-23): the customer's net credit
+> on every posted Journal Voucher that has a line on the DISCOUNTS, CLAIMS & COMMISSIONS (400008)
+> account — the way the client actually gives commission ("LESS" lines). Net Sales goes down with
+> it. Sale-time D% and invoice discounts are already inside each bill's net value and are **not**
+> counted again here. Sale Analysis is unaffected: its Payment Received still adds receipt
+> commission only.
 
-**Data:** reads `sale_bills`, `sale_returns`, `receipts`, `customers`, `regions`.
+**Data:** reads `sale_bills`, `sale_returns`, `receipts`, `journal_vouchers` / `journal_voucher_lines`, `customers`, `regions`.
 
 ---
 

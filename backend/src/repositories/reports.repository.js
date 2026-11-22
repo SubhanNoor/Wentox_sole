@@ -1,6 +1,7 @@
 // Repository layer: SQL only — parameterized queries via mssql named params
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
 const { sql, query } = require('../db/pool');
+const CODES = require('../constants/reservedAccounts');
 
 // Production log for Module 5.1's reports:production — daily/weekly/monthly/overall filters are
 // resolved to date_from/date_to by the service, same convention as saleBills.service.js#resolveDateRange.
@@ -416,6 +417,12 @@ async function saleAggregateByCustomer(filters = {}) {
   // Received — a JV reduces what is owed but is not money collected, and mixing the two would make
   // collections read higher than the cash and cheques actually taken in.
   const jvWhere = `WHERE ${[...jvDate, "status = 'CONFIRMED'"].join(' AND ')}`;
+  // JV commission (per the user, 2026-11-23): the customer's net credit on every confirmed JV that
+  // has a line on a DISCOUNTS, CLAIMS & COMMISSIONS (400008) account — how the client actually
+  // gives commission ("LESS"/"TELE" lines). Reported in the Sale Report's Commission column next
+  // to receipts.commission; kept as its own field so Sale Analysis (which adds receipt commission
+  // to Payment Received) is untouched.
+  params.dccCode = { type: sql.VarChar(20), value: CODES.DISCOUNTS_CLAIMS_COMMISSIONS };
 
   const result = await query(
     `SELECT
@@ -426,6 +433,7 @@ async function saleAggregateByCustomer(filters = {}) {
        ISNULL(rc.total_payment, 0) + ISNULL(st.total_settled, 0) AS total_payment,
        ISNULL(rc.total_commission, 0) AS total_commission,
        ISNULL(jv.total_jv, 0) AS total_jv,
+       ISNULL(jc.jv_commission, 0) AS jv_commission,
        CASE WHEN sb.total_sales IS NOT NULL OR sr.total_returns IS NOT NULL
               OR rc.total_payment IS NOT NULL OR st.total_settled IS NOT NULL
               OR jv.total_jv IS NOT NULL THEN 1 ELSE 0 END AS has_activity
@@ -463,6 +471,18 @@ async function saleAggregateByCustomer(filters = {}) {
        JOIN dbo.journal_vouchers h ON h.jv_id = jvl.jv_id
        ${jvWhere} GROUP BY jvl.ba_id
      ) jv ON jv.ba_id = c.ba_id
+     LEFT JOIN (
+       SELECT jvl.ba_id, SUM(jvl.credit - jvl.debit) AS jv_commission
+       FROM dbo.journal_voucher_lines jvl
+       JOIN dbo.journal_vouchers h ON h.jv_id = jvl.jv_id
+       ${jvWhere}
+         AND EXISTS (
+           SELECT 1 FROM dbo.journal_voucher_lines x
+           JOIN dbo.business_accounts xba ON xba.ba_id = x.ba_id
+           JOIN dbo.chart_of_accounts xc ON xc.ac_id = xba.ac_id
+           WHERE x.jv_id = h.jv_id AND xc.code = @dccCode)
+       GROUP BY jvl.ba_id
+     ) jc ON jc.ba_id = c.ba_id
      -- EVERY customer, flagged with has_activity: the service also keeps the idle ones that still
      -- carry a balance (per the user, 2026-10-14), which only the ledger balance can tell.
      ORDER BY r.name, ci.name, c.name`,

@@ -519,16 +519,17 @@ async function saleAnalysis(filters = {}) {
 }
 
 // UC-32 Sale Report — Total Sales / Cartons / Commission / Sale Return / Net Sales / Payment.
-// Net Sales = Total Sales - Commission - Sale Return (commission is payment-time only, from
-// receipts.commission — sale-time D% and invoice discounts are already inside net_value and are
-// NOT subtracted again, per UC-32's own warning).
+// Net Sales = Total Sales - Commission - Sale Return. Commission = receipts.commission + JV
+// commission (the customer's net credit on JVs against DISCOUNTS, CLAIMS & COMMISSIONS 400008 —
+// per the user, 2026-11-23, Net Sales goes down with it). Sale-time D% and invoice discounts are
+// already inside net_value and are NOT subtracted again, per UC-32's own warning.
 // `balance`: the customer's account balance on the To date (partyBalances above).
 async function saleReport(filters = {}) {
   const range = resolveDateRange(filters);
   const rows = await saleCustomerRows(range);
   const mapped = rows.map((r) => {
     const totalSales = Number(r.total_sales);
-    const commission = Number(r.total_commission);
+    const commission = Number(r.total_commission) + Number(r.jv_commission);
     const saleReturn = Number(r.total_returns);
     return {
       customer_id: r.customer_id,

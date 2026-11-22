@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   Settings, LogOut, ChevronDown, Home,
-  Pin, BookmarkPlus, ArrowDownToLine, X
+  Pin, BookmarkPlus, ArrowDownToLine
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -395,15 +395,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
   };
 
-  // Remove one pinned shortcut (per the user, 2026-11-18 — the bar had no way to take one off).
-  // Saved like a pin, so it stays gone after a restart; + Pin Page to Bar can put it back.
-  // Not undone by the seed/backfill in loadShortcuts(): those run once per version, never again.
-  const handleRemoveShortcut = (id: string) => {
-    const updated = shortcuts.filter(s => s.id !== id);
-    setShortcuts(updated);
-    localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
-  };
-
   const handleDropShortcut = (e: React.DragEvent) => {
     try {
       const raw = e.dataTransfer.getData('text/plain');
@@ -629,7 +620,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
                   return (
                     <div
                       key={s.id}
-                      className={`group flex items-center gap-1 pl-3 pr-1.5 py-1 rounded-full text-xs font-bold transition-all shadow-2xs border ${
+                      className={`flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold transition-all shadow-2xs border ${
                         isActive
                           ? 'bg-[#111c2a] text-[#B08D57] border-[#111c2a]'
                           : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200 hover:border-amber-400'
@@ -645,15 +636,6 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
                         className="cursor-pointer font-semibold hover:underline"
                       >
                         {s.label}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveShortcut(s.id)}
-                        title={`Remove "${s.label}" from Quick Menu`}
-                        aria-label={`Remove ${s.label} from Quick Menu`}
-                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 rounded-full p-0.5 text-slate-400 hover:text-white hover:bg-rose-600 transition-all cursor-pointer"
-                      >
-                        <X size={11} />
                       </button>
                     </div>
                   );
