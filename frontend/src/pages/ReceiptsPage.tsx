@@ -296,7 +296,9 @@ export default function ReceiptsPage() {
       await refreshVoucher(voucher.voucher_id);
     }
     else if (deleteTarget.kind === 'settlement' && receiptId === deleteTarget.id) resetToNewVoucher();
-    else if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) resetToNewVoucher();
+    // The whole voucher on screen was deleted: open the most recent remaining unposted one (or the
+    // blank locked form when none are left), exactly as picking Unposted does (per the user, 2026-11-22).
+    else if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) await handleNavFilterChange('unposted');
     else if (voucher) await refreshVoucher(voucher.voucher_id);
     // G-05: a deleted pointer row hands ▶ to the row that takes its place (or the new last row).
     const deletedKey = deleteTarget.kind === 'settlement' ? `s${deleteTarget.id}`

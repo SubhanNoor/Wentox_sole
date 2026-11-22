@@ -36,6 +36,16 @@ module.exports = function register() {
     return service.saleReport(payload);
   }));
 
+  ipcMain.handle('reports:customer-sales', wrap((payload) => {
+    requireSession();
+    return service.customerSales(payload);
+  }));
+
+  ipcMain.handle('reports:article-sales', wrap((payload) => {
+    requireSession();
+    return service.articleSales(payload);
+  }));
+
   ipcMain.handle('reports:vendor-report', wrap((payload) => {
     requireSession();
     return service.vendorReport(payload);

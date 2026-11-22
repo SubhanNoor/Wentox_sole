@@ -770,7 +770,9 @@ export default function JournalVoucherPage() {
     const res = await api.journalVouchers.remove(targetId, password);
     if (!res.ok) { fail('Failed to delete: ' + res.error.message); return; }
     flash('Journal Voucher deleted successfully.');
-    if (jvId === targetId) resetToNewVoucher();
+    // Open the most recent remaining unposted voucher (or the blank locked form when none are
+    // left), exactly as picking Unposted does (per the user, 2026-11-22).
+    if (jvId === targetId) await handleBrowseFilterChange('unposted');
     refresh();
     refreshUnposted();
     refreshNav();

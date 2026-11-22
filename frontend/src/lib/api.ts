@@ -1181,6 +1181,11 @@ export interface ChequeRow {
   customer_id?: number | null;
   customer_name?: string | null;
   bank_name?: string;
+  /**
+   * Set by cheques.list() on a BOUNCED record whose same cheque (same party and number) was entered
+   * again as a later posted receipt — a stale duplicate of a cheque that is live elsewhere.
+   */
+  reentered?: number | boolean;
 }
 
 export type ChequeDispositionType = 'DEPOSIT' | 'VENDOR_PAYMENT' | 'EXPENSE_PAYMENT';
@@ -1857,6 +1862,49 @@ export interface SaleReportFilters extends DateRangeFilters {
   group_by?: 'region';
 }
 
+// Customer Sales / Article Sales (client request, 2026-11-23). One row per posted sale-bill or
+// sale-return LINE; returns arrive negative (cartons, pairs, value), and a bill's invoice discount
+// on the customer page arrives as its own BILL_DISCOUNT row. Dates are 'YYYY-MM-DD'.
+export interface SaleDetailRow {
+  kind: 'SALE' | 'RETURN' | 'BILL_DISCOUNT';
+  doc_id: number;
+  date: string;
+  bill_no: string;
+  customer_name: string;
+  article_code: string;
+  article_name: string;
+  color: string;
+  cartons: number;
+  pairs: number;
+  rate: number;
+  discount_percent: number;
+  value: number;
+}
+
+export interface SaleDetailTotals {
+  cartons: number;
+  pairs: number;
+  value: number;
+}
+
+export interface CustomerSalesResult {
+  rows: SaleDetailRow[];
+  totals: SaleDetailTotals;
+}
+
+/** One price of an article: every row sold (or returned) at that rate, with its subtotal. */
+export interface ArticleSalesGroup extends SaleDetailTotals {
+  rate: number;
+  from_date: string;
+  to_date: string;
+  rows: SaleDetailRow[];
+}
+
+export interface ArticleSalesResult {
+  groups: ArticleSalesGroup[];
+  totals: SaleDetailTotals;
+}
+
 export interface VendorReportRow {
   vendor_id: number;
   vendor_name: string;
@@ -2482,6 +2530,8 @@ declare global {
         'vendor-stock': (payload?: { as_of_date?: string }) => Promise<ApiResult<VendorStockRow[]>>;
         'sale-analysis': (payload?: SaleReportFilters) => Promise<ApiResult<SaleAnalysisRow[] | SaleAnalysisRegionGroup[]>>;
         'sale-report': (payload?: SaleReportFilters) => Promise<ApiResult<SaleReportRow[] | SaleReportRegionGroup[]>>;
+        'customer-sales': (payload: { customer_id: number } & DateRangeFilters) => Promise<ApiResult<CustomerSalesResult>>;
+        'article-sales': (payload: { article_id: number } & DateRangeFilters) => Promise<ApiResult<ArticleSalesResult>>;
         'vendor-report': (payload?: VendorReportFilters) => Promise<ApiResult<VendorReportRow[]>>;
         'vendor-ledger': (payload: { vendor_id: number } & DateRangeFilters) => Promise<ApiResult<AccountLedgerResult>>;
         'payment-trail': (payload?: DateRangeFilters) => Promise<ApiResult<PaymentTrailResult>>;
@@ -3749,6 +3799,10 @@ export const reports = {
     window.api ? window.api.reports['sale-analysis'](payload) : Promise.resolve(NO_BRIDGE),
   saleReport: (payload?: SaleReportFilters) =>
     window.api ? window.api.reports['sale-report'](payload) : Promise.resolve(NO_BRIDGE),
+  customerSales: (payload: { customer_id: number } & DateRangeFilters) =>
+    window.api ? window.api.reports['customer-sales'](payload) : Promise.resolve(NO_BRIDGE),
+  articleSales: (payload: { article_id: number } & DateRangeFilters) =>
+    window.api ? window.api.reports['article-sales'](payload) : Promise.resolve(NO_BRIDGE),
   vendorReport: (payload?: VendorReportFilters) =>
     window.api ? window.api.reports['vendor-report'](payload) : Promise.resolve(NO_BRIDGE),
   vendorLedger: (payload: { vendor_id: number } & DateRangeFilters) =>

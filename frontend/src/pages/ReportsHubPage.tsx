@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { SaleAnalysisContent } from '@/pages/SaleAnalysisPage';
-import { SaleReportContent } from '@/pages/SaleReportPage';
+import { SaleReportWithSubPages } from '@/pages/SaleReportSubPages';
 import { VendorReportContent } from '@/pages/VendorReportPage';
 import { PaymentTrailContent } from '@/pages/PaymentTrailPage';
 import { ReportKhaataContent } from '@/pages/ReportKhaataPage';
@@ -89,7 +89,7 @@ export default function ReportsHubPage() {
       <div className="mx-auto" style={{ maxWidth: 1150 }}>
         <div className={`transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}>
           {activeTab === 'sale-analysis' && <SaleAnalysisContent />}
-          {activeTab === 'sale-report' && <SaleReportContent />}
+          {activeTab === 'sale-report' && <SaleReportWithSubPages />}
           {activeTab === 'vendor' && <VendorReportContent />}
           {activeTab === 'payment-trail' && <PaymentTrailContent />}
           {activeTab === 'account-ledger' && <ReportKhaataContent />}

@@ -94,7 +94,18 @@ async function list(filters = {}) {
     // receipt is still DRAFT — assertDisposable() refuses the latter, and without this column the
     // UI offered a Dispose button that could only ever fail.
     `SELECT ch.*, r.amount AS receipt_amount, r.ba_id, r.status AS receipt_status,
-            ba.name AS account_name, c.customer_id, c.name AS customer_name, b.name AS bank_name
+            ba.name AS account_name, c.customer_id, c.name AS customer_name, b.name AS bank_name,
+            -- 1 = this BOUNCED record is a stale duplicate: the same paper cheque (same party, same
+            -- number) was entered again later as a posted receipt that is still on the books. The
+            -- newer record is the live one; this one must not show as open or count as unallocated.
+            -- Only a LATER receipt supersedes (r2 > r), so two bounced records never hide each other.
+            CASE WHEN ch.cheque_status = 'BOUNCED' AND EXISTS (
+                   SELECT 1 FROM dbo.cheques ch2
+                   JOIN dbo.receipts r2 ON r2.receipt_id = ch2.receipt_id
+                   WHERE r2.ba_id = r.ba_id AND r2.status = 'CONFIRMED' AND r2.receipt_id > r.receipt_id
+                     AND ch2.cheque_status <> 'RETURNED'
+                     AND LTRIM(RTRIM(ch2.cheque_no)) = LTRIM(RTRIM(ch.cheque_no))
+                 ) THEN 1 ELSE 0 END AS reentered
      FROM dbo.cheques ch
      JOIN dbo.receipts r ON r.receipt_id = ch.receipt_id
      JOIN dbo.business_accounts ba ON ba.ba_id = r.ba_id

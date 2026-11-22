@@ -966,7 +966,9 @@ const nextSystemBillNo = useMemo(
     }
     setSuccessMsg('Purchase deleted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    if (purchaseId === targetId && !currentIsPosted) resetToNewPurchase();
+    // Open the most recent remaining unposted purchase (or the blank locked form when none are
+    // left), exactly as picking Unposted does (per the user, 2026-11-22).
+    if (purchaseId === targetId && !currentIsPosted) await handleNavFilterChange('unposted');
     refreshUnposted();
     refreshDeletedNumbers();
   };

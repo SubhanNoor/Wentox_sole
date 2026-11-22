@@ -208,7 +208,9 @@ export default function ExpensesPage() {
     // Only a whole-voucher delete touches voucher_no — a single line's deletion never does.
     if (deleteTarget.kind === 'voucher') refreshDeletedNumbers();
     setBalanceRefreshKey(k => k + 1);
-    if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) resetToNewVoucher();
+    // The whole voucher on screen was deleted: open the most recent remaining unposted one (or the
+    // blank locked form when none are left), exactly as picking Unposted does (per the user, 2026-11-22).
+    if (deleteTarget.kind === 'voucher' && voucher?.voucher_id === deleteTarget.id) await handleNavFilterChange('unposted');
     else if (voucher) await refreshVoucher(voucher.voucher_id);
     // G-05: a deleted pointer row hands ▶ to the row that takes its place (or the new last row).
     if (deleteTarget.kind !== 'voucher' && deleteTarget.id === lastEnteredLineId) {

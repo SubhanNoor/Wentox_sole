@@ -975,6 +975,96 @@ async function overallDirectory(searchQuery, entityType) {
   return result.recordset;
 }
 
+// ── Sale detail reports (Customer Sales / Article Sales) ─────────────────────────────────────────
+// One row per POSTED sale-bill or sale-return LINE. "Posted" is derived from ledger_entries, the
+// same rule saleAggregateByCustomer above uses (sale_bills/sale_returns have no status column).
+// Dates come back as 'YYYY-MM-DD' text (style 23) so no timezone shift can move a day.
+// `filters`: { customerId | articleId, dateFrom, dateTo }.
+function saleDetailConditions(filters, dateCol, params) {
+  const conditions = [];
+  if (filters.customerId != null) {
+    conditions.push('h.customer_id = @customerId');
+    params.customerId = { type: sql.Int, value: filters.customerId };
+  }
+  if (filters.articleId != null) {
+    conditions.push('a.article_id = @articleId');
+    params.articleId = { type: sql.Int, value: filters.articleId };
+  }
+  if (filters.dateFrom) {
+    conditions.push(`h.${dateCol} >= @dateFrom`);
+    params.dateFrom = { type: sql.Date, value: filters.dateFrom };
+  }
+  if (filters.dateTo) {
+    conditions.push(`h.${dateCol} <= @dateTo`);
+    params.dateTo = { type: sql.Date, value: filters.dateTo };
+  }
+  return conditions;
+}
+
+async function saleDetailLines(filters = {}) {
+  const params = {};
+  const saleWhere = [
+    ...saleDetailConditions(filters, 'bill_date', params),
+    "EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'SALE_BILL' AND le.source_id = h.bill_id)",
+  ].join(' AND ');
+  const returnWhere = [
+    ...saleDetailConditions(filters, 'return_date', params),
+    "EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'SALE_RETURN' AND le.source_id = h.return_id)",
+  ].join(' AND ');
+
+  const result = await query(
+    `SELECT * FROM (
+       SELECT 'SALE' AS kind, 0 AS kind_order, h.bill_id AS doc_id, CONVERT(char(10), h.bill_date, 23) AS doc_date,
+              h.bill_no, c.name AS customer_name, a.code AS article_code, a.name AS article_name, ac.color,
+              i.cartons, i.pairs, i.rate, i.discount_percent, i.value, i.line_no
+       FROM dbo.sale_bill_items i
+       JOIN dbo.sale_bills h ON h.bill_id = i.bill_id
+       JOIN dbo.customers c ON c.customer_id = h.customer_id
+       JOIN dbo.article_colors ac ON ac.variant_id = i.variant_id
+       JOIN dbo.articles a ON a.article_id = ac.article_id
+       WHERE ${saleWhere}
+       UNION ALL
+       SELECT 'RETURN', 1, h.return_id, CONVERT(char(10), h.return_date, 23),
+              h.bill_no, c.name, a.code, a.name, ac.color,
+              i.cartons, i.pairs, i.rate, i.discount_percent, i.value, i.line_no
+       FROM dbo.sale_return_items i
+       JOIN dbo.sale_returns h ON h.return_id = i.return_id
+       JOIN dbo.customers c ON c.customer_id = h.customer_id
+       JOIN dbo.article_colors ac ON ac.variant_id = i.variant_id
+       JOIN dbo.articles a ON a.article_id = ac.article_id
+       WHERE ${returnWhere}
+     ) q
+     ORDER BY doc_date, kind_order, doc_id, line_no`,
+    params,
+  );
+  return result.recordset;
+}
+
+// Bill-level (invoice) discounts of the same posted documents: a sale bill's net value is its
+// lines minus this, so the Customer Sales page lists it to reconcile with the Sale Report.
+async function saleDetailInvoiceDiscounts(filters = {}) {
+  const params = {};
+  const saleWhere = [
+    ...saleDetailConditions({ ...filters, articleId: null }, 'bill_date', params),
+    'h.invoice_discount <> 0',
+    "EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'SALE_BILL' AND le.source_id = h.bill_id)",
+  ].join(' AND ');
+  const returnWhere = [
+    ...saleDetailConditions({ ...filters, articleId: null }, 'return_date', params),
+    'h.invoice_discount <> 0',
+    "EXISTS (SELECT 1 FROM dbo.ledger_entries le WHERE le.source_type = 'SALE_RETURN' AND le.source_id = h.return_id)",
+  ].join(' AND ');
+  const result = await query(
+    `SELECT 'SALE' AS kind, h.bill_id AS doc_id, h.bill_no, h.invoice_discount
+       FROM dbo.sale_bills h WHERE ${saleWhere}
+     UNION ALL
+     SELECT 'RETURN', h.return_id, h.bill_no, h.invoice_discount
+       FROM dbo.sale_returns h WHERE ${returnWhere}`,
+    params,
+  );
+  return result.recordset;
+}
+
 module.exports = {
   productionLog,
   productLedger,
@@ -983,6 +1073,8 @@ module.exports = {
   ledgerRows,
   netBalance,
   saleAggregateByCustomer,
+  saleDetailLines,
+  saleDetailInvoiceDiscounts,
   vendorReportRows,
   paymentTrailRows,
   businessAccountsWithCategory,

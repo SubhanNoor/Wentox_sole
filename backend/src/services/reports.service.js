@@ -1209,6 +1209,117 @@ async function overallSearchLedger(entityType, baId, filters = {}, session) {
   return { has_account: true, ...ledger };
 }
 
+// ── Sale detail reports ──────────────────────────────────────────────────────────────────────────
+// Customer Sales: every posted sale line (and sale-return line, as negatives) of one customer in a
+// date range, each with ITS OWN rate — the same article sold at different prices stays on separate
+// rows. A bill's invoice (bill-level) discount follows its lines as a negative "BILL_DISCOUNT" row,
+// so the total equals that customer's Total Sales less Sale Returns on the Sale Report.
+// Article Sales: every posted sale/return line of one article, grouped by its rate (price). One
+// group per distinct price (client choice, 2026-11-23): a price that comes back later stays in the
+// same group, which shows the first and last date it was used. Bill-level discounts belong to the
+// whole bill, not one article, so they are not in this report.
+const round1 = (n) => Math.round(n * 10) / 10;
+const round2 = (n) => Math.round(n * 100) / 100;
+
+function shapeSaleDetailRow(r) {
+  const sign = r.kind === 'RETURN' ? -1 : 1;
+  return {
+    kind: r.kind,
+    doc_id: r.doc_id,
+    date: r.doc_date,
+    bill_no: r.bill_no,
+    customer_name: r.customer_name,
+    article_code: r.article_code,
+    article_name: r.article_name,
+    color: r.color,
+    cartons: round1(sign * Number(r.cartons)),
+    pairs: sign * Number(r.pairs),
+    rate: Number(r.rate),
+    discount_percent: Number(r.discount_percent),
+    value: round2(sign * Number(r.value)),
+  };
+}
+
+function sumSaleDetail(rows) {
+  return {
+    cartons: round1(rows.reduce((s, r) => s + r.cartons, 0)),
+    pairs: rows.reduce((s, r) => s + r.pairs, 0),
+    value: round2(rows.reduce((s, r) => s + r.value, 0)),
+  };
+}
+
+function saleDetailFilters(filters) {
+  const range = resolveDateRange(filters);
+  if (range.date_from && range.date_to && range.date_from > range.date_to) {
+    throw ApiError.badRequest('From date is after To date');
+  }
+  return { dateFrom: range.date_from, dateTo: range.date_to };
+}
+
+async function customerSales(filters = {}) {
+  const customerId = Number(filters.customer_id);
+  if (!customerId) throw ApiError.badRequest('customer_id is required');
+  const query = { customerId, ...saleDetailFilters(filters) };
+  const [lines, discounts] = await Promise.all([
+    repository.saleDetailLines(query),
+    repository.saleDetailInvoiceDiscounts(query),
+  ]);
+
+  // Lines come back ordered by date / sale-before-return / document / line; a document's invoice
+  // discount goes right after its last line.
+  const discountByDoc = new Map(discounts.map((d) => [`${d.kind}:${d.doc_id}`, d]));
+  const rows = [];
+  lines.forEach((line, idx) => {
+    rows.push(shapeSaleDetailRow(line));
+    const next = lines[idx + 1];
+    const isLastOfDoc = !next || next.kind !== line.kind || next.doc_id !== line.doc_id;
+    const discount = isLastOfDoc ? discountByDoc.get(`${line.kind}:${line.doc_id}`) : null;
+    if (discount) {
+      const amount = Number(discount.invoice_discount);
+      rows.push({
+        kind: 'BILL_DISCOUNT',
+        source: line.kind,
+        doc_id: line.doc_id,
+        date: line.doc_date,
+        bill_no: line.bill_no,
+        customer_name: line.customer_name,
+        article_code: '',
+        article_name: '',
+        color: '',
+        cartons: 0,
+        pairs: 0,
+        rate: 0,
+        discount_percent: 0,
+        // A sale's invoice discount lowers what the customer owes; a return's lowers what comes back.
+        value: round2(line.kind === 'RETURN' ? amount : -amount),
+      });
+    }
+  });
+  return { rows, totals: sumSaleDetail(rows) };
+}
+
+async function articleSales(filters = {}) {
+  const articleId = Number(filters.article_id);
+  if (!articleId) throw ApiError.badRequest('article_id is required');
+  const lines = await repository.saleDetailLines({ articleId, ...saleDetailFilters(filters) });
+  const rows = lines.map(shapeSaleDetailRow);
+
+  const byPrice = new Map();
+  for (const row of rows) {
+    const key = row.rate.toFixed(2);
+    if (!byPrice.has(key)) byPrice.set(key, { rate: row.rate, from_date: row.date, to_date: row.date, rows: [] });
+    const group = byPrice.get(key);
+    group.rows.push(row);
+    if (row.date < group.from_date) group.from_date = row.date;
+    if (row.date > group.to_date) group.to_date = row.date;
+  }
+  // Oldest price first (when it first appeared), ties by price — so the list reads as the price history.
+  const groups = [...byPrice.values()]
+    .sort((a, b) => a.from_date.localeCompare(b.from_date) || a.rate - b.rate)
+    .map((g) => ({ ...g, ...sumSaleDetail(g.rows) }));
+  return { groups, totals: sumSaleDetail(rows) };
+}
+
 module.exports = {
   stock,
   production,
@@ -1218,6 +1329,8 @@ module.exports = {
   vendorLedger,
   saleAnalysis,
   saleReport,
+  customerSales,
+  articleSales,
   vendorReport,
   paymentTrail,
   businessLedger,

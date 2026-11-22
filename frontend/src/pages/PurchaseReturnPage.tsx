@@ -1105,7 +1105,9 @@ const nextSystemBillNo = useMemo(
     }
     setSuccessMsg('Purchase return deleted successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
-    if (returnId === targetId && !currentIsPosted) resetToNewReturn();
+    // Open the most recent remaining unposted return (or the blank locked form when none are
+    // left), exactly as picking Unposted does (per the user, 2026-11-22).
+    if (returnId === targetId && !currentIsPosted) await handleNavFilterChange('unposted');
     refreshUnposted();
     refreshDeletedNumbers();
   };

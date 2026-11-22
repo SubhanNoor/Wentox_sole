@@ -293,7 +293,8 @@ The client's "hard and fast rule" (2026-09-18), shared by every numbered documen
 
 - A posted document must be **Un Posted** before any delete.
 - A deleted document's **Number is retired** and logged (never reused).
-- Deleting the document on screen resets to the blank locked form.
+- Deleting the document on screen opens the **most recent remaining unposted** document, exactly as
+  picking Unposted does (cursor on New); only when none are left does it show the blank locked form.
 - Deleting all lines one by one and closing the window does **not** bring them back on reopen;
   the emptied edit is kept as unsaved work.
 
@@ -365,3 +366,4 @@ These were decided on the Journal Voucher page and are the shared standard.
 | 2026-10-06 | **Rolled out to every document page** (Sale Bill, Sale Return, Purchase, Purchase Return, Receipts, Payments, Stock Voucher). User rulings: the Master/Detail flow replaces G-08 and the 2026-08-31 rules everywhere; Post always clears (SB-05/P-02 dropped); deleted numbers are no longer browse stops; Receipts/Payments/Stock Voucher numbers come from never-reused sequences (migration 042, reversing the 2026-09-07 reuse); Receipts/Payments keep per-entry saving (§17) |
 | 2026-11-11 | Receipts/Payments: Done on an empty entry row makes the voucher read-only; Post, Un Post, Print, PDF, Excel only on a read-only voucher (§17 updated) |
 | 2026-11-18 | Opening a saved document scrolls its lines grid to the end, on every document page ([§5](#5-the-lines-grid)) |
+| 2026-11-22 | Deleting the document on screen opens the most recent remaining unposted document instead of a blank form ([§13](#13-deleting)); every document page |

@@ -1380,9 +1380,11 @@ const nextSystemBillNo = useMemo(
         } else {
           setSuccessMsg('Bill deleted successfully.');
           setTimeout(() => setSuccessMsg(''), 3000);
-          // The bill on screen (if any) may have just been the one deleted — drop back to a
-          // fresh form rather than leave it pointing at a bill that no longer exists.
-          if (billId === targetId && !currentBillIsPosted) resetToNewBill();
+          // The bill on screen (if any) may have just been the one deleted — don't leave it
+          // pointing at a bill that no longer exists. Open the most recent remaining unposted
+          // one (or the blank locked form when none are left), exactly as picking Unposted does
+          // (per the user, 2026-11-22).
+          if (billId === targetId && !currentBillIsPosted) await handleBrowseFilterChange('unposted');
           await Promise.all([refreshUnposted(), refreshStock(), refreshDeletedNumbers()]);
         }
       }

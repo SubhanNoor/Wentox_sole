@@ -355,15 +355,12 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
               const difference = filteredTotals.totalDebit - filteredTotals.totalCredit;
               return (
                 <tr style={{ fontWeight: 'bold' }}>
-                  <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px' }}>
-                    <span style={{ display: 'flex', justifyContent: 'flex-end', gap: '24px' }}>
-                      <span style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}>Difference:</span>
-                      <span style={{ fontFamily: 'monospace', minWidth: '110px', textAlign: 'right', color: difference < 0 ? '#e11d48' : '#047857' }}>
-                        {difference < 0 ? `(${formatCurrency(-difference)})` : formatCurrency(difference)}
-                      </span>
-                    </span>
+                  {/* Label left-aligned under the description; the figure in the next box (the debit
+                      column); a single empty box for the credit column (per the user, 2026-11-23). */}
+                  <td colSpan={2} style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Difference:</td>
+                  <td style={{ border: '1px solid #000000', padding: '6px 8px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: difference < 0 ? '#e11d48' : '#047857' }}>
+                    {difference < 0 ? `(${formatCurrency(-difference)})` : formatCurrency(difference)}
                   </td>
-                  <td style={{ border: '1px solid #000000' }} />
                   <td style={{ border: '1px solid #000000' }} />
                 </tr>
               );

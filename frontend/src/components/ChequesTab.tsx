@@ -111,13 +111,13 @@ export default function ChequesTab() {
     setLoading(true);
     const res = await api.cheques.list();
     if (res.ok) {
-      setCheques(res.data);
       const entries = await Promise.all(
         res.data.map(async c => {
           const allocRes = await api.cheques.allocationsForReceipt(c.receipt_id);
           return [c.receipt_id, allocRes.ok ? allocRes.data : []] as const;
         })
       );
+      setCheques(res.data);
       setAllocationsByReceipt(Object.fromEntries(entries));
     } else {
       fail('Failed to load cheques: ' + res.error.message);
@@ -148,6 +148,9 @@ export default function ChequesTab() {
     // A BOUNCED cheque is NOT zero any more: every allocation is REVERSED, so the full receipt
     // amount is available to issue again (the backend re-credits the customer on the next action).
     if (c.cheque_status === 'RETURNED') return 0;
+    // A bounced record whose cheque was entered again is a stale duplicate — the live one carries
+    // the amount, so this one holds nothing (otherwise the directory total exceeds CHEQUES IN HAND).
+    if (c.reentered) return 0;
     const active = (allocationsByReceipt[c.receipt_id] || []).filter(a => a.status === 'ACTIVE');
     const allocated = active.reduce((s, a) => s + a.amount, 0);
     return Math.max(0, (c.receipt_amount ?? 0) - allocated);
@@ -166,6 +169,10 @@ export default function ChequesTab() {
       .filter(row => {
         if (statusFilter === 'open') {
           if (!OPEN_STATUSES.includes(row.status)) return false;
+          // Received directory = cheques still with us. One fully deposited or endorsed (nothing
+          // left to allocate) lives in the Deposited / Endorsed views instead, and a bounced
+          // record that was entered again is a stale duplicate of the live one.
+          if (row.unallocated <= 0) return false;
         } else if (statusFilter !== 'all' && row.status !== statusFilter) {
           return false;
         }
@@ -375,12 +382,11 @@ export default function ChequesTab() {
             ))
           )}
           <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
-            <td colSpan={4} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL SUM</td>
+            {/* 5 + 1 + 1 = 7, matching the header: the label spans Received Date … Status, so the two
+                totals sit under Total and Unassigned (they were one column to the left before). */}
+            <td colSpan={5} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>REPORT TOTAL SUM</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalValue)}</td>
             <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>{formatCurrency(totalUnallocated)}</td>
-            {/* 4 + 1 + 1 + 1 = 7, matching the header. Without this cell the Status column had no
-                footer, so the printed totals sat one column left of the figures they belonged to. */}
-            <td style={{ border: '1px solid #000000', padding: '6px' }} />
           </tr>
         </tbody>
       </table>

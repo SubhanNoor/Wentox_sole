@@ -985,7 +985,9 @@ export default function StockVoucherPage() {
     const res = await api.stockVouchers.remove(targetId, password);
     if (!res.ok) { fail('Failed to delete: ' + res.error.message); return; }
     flash('Stock Voucher deleted successfully.');
-    if (svId === targetId) resetToNewVoucher();
+    // Open the most recent remaining unposted voucher (or the blank locked form when none are
+    // left), exactly as picking Unposted does (per the user, 2026-11-22).
+    if (svId === targetId) await handleBrowseFilterChange('unposted');
     refresh();
     refreshUnposted();
     refreshUnpostedReservations(svId);
