@@ -5,7 +5,7 @@ import AppLayout from '@/components/AppLayout';
 import DocumentToolbar from '@/components/DocumentToolbar';
 import RowActions from '@/components/RowActions';
 import SearchableSelect from '@/components/SearchableSelect';
-import SearchModal from '@/components/SearchModal';
+import SearchModal, { findDirectMatch } from '@/components/SearchModal';
 import PageToasts from '@/components/PageToasts';
 import * as api from '@/lib/api';
 import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, SettlementRow, ReceiptVoucherRow, VoucherActionResult, DeletedNumberRow } from '@/lib/api';
@@ -26,6 +26,7 @@ import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import { useScrollLinesToEnd } from '@/hooks/useScrollLinesToEnd';
 
 // Cheque disposal (deposit/endorse/bounce/return) moved to the consolidated Cheque page's
 // Disposal tab — see ChequePage.tsx. This page keeps only receipt entry/records.
@@ -353,6 +354,8 @@ export default function ReceiptsPage() {
   const fail = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(''), 5000); };
 
   const voucherLines = voucher?.lines ?? [];
+  // Opening a saved voucher shows its LAST lines (document_page_standard.md §5).
+  const linesScrollRef = useScrollLinesToEnd(receiptId, voucherLines.length);
 
   // RJ-03: wraps the first entry field (the account picker) so Done/New can put the cursor back on
   // it. The form does not unmount between lines, so the app-wide G-01 auto-focus never re-fires and
@@ -555,6 +558,11 @@ export default function ReceiptsPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
+      // Text that already names exactly one account (e.g. the label of the account just picked)
+      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
+      // nothing because labels carry the parent account name (per the user, 2026-11-19).
+      const direct = findDirectMatch(accountOptions, accountSearchText);
+      if (direct) { handleAccountSelect(direct); return; }
       setAccountModalSeed(accountSearchText);
       setIsAccountModalOpen(true);
     }
@@ -594,6 +602,11 @@ export default function ReceiptsPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
+      // Text that already names exactly one account (e.g. the label of the account just picked)
+      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
+      // nothing because labels carry the parent account name (per the user, 2026-11-19).
+      const direct = findDirectMatch(bankOptions, bankSearchText);
+      if (direct) { handleBankSelect(direct); return; }
       setBankModalSeed(bankSearchText);
       setIsBankModalOpen(true);
     }
@@ -2312,7 +2325,7 @@ export default function ReceiptsPage() {
                   {/* G-04: only this table scrolls — everything above (header, entry form) and
                       below (totals footer) stays fixed, per the client's own reference screenshot
                       (2026-09-15). */}
-                  <div className="overflow-auto flex-1 min-h-0">
+                  <div ref={linesScrollRef} className="overflow-auto flex-1 min-h-0">
                     <table className="w-full text-left border-collapse text-sm">
                       <thead>
                         <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>

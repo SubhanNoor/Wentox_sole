@@ -15,12 +15,15 @@ type ReportTab =
   | 'account-ledger' | 'business-ledger' | 'cash-book' | 'product-ledger'
   | 'overall-trail' | 'vendor-balances' | 'customer-balances';
 
-const TABS: { key: ReportTab; label: string }[] = [
+// `hidden`: still opens from the menu, but has no button in the tab bar.
+const TABS: { key: ReportTab; label: string; hidden?: boolean }[] = [
   { key: 'sale-analysis', label: 'Sale Analysis' },
   { key: 'sale-report', label: 'Sale Report' },
   { key: 'vendor', label: 'Vendor Report' },
   { key: 'payment-trail', label: 'Payment Trail' },
-  { key: 'account-ledger', label: 'Account Ledger' },
+  // Tab button removed (per the user, 2026-11-19); the report itself stays — menu 3.1 CUSTOMER
+  // REPORT opens it, so it is named after that menu item (2026-11-19) — window title and pins.
+  { key: 'account-ledger', label: 'Customer Report', hidden: true },
   { key: 'business-ledger', label: 'Business Ledger' },
   { key: 'cash-book', label: 'Cash Book' },
   { key: 'product-ledger', label: 'Product Ledger' },
@@ -60,7 +63,7 @@ export default function ReportsHubPage() {
   // headerAction slot), same treatment as Sale Bill/Sale Return/Receipts/Expenses/Cheque.
   const tabBar = (
     <div className="flex flex-wrap gap-1.5" data-no-print>
-      {TABS.map(tab => (
+      {TABS.filter(tab => !tab.hidden).map(tab => (
         <button
           key={tab.key}
           draggable={true}

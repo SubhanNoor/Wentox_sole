@@ -4,7 +4,7 @@ import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
 import DocumentToolbar from '@/components/DocumentToolbar';
 import RowActions from '@/components/RowActions';
-import SearchModal from '@/components/SearchModal';
+import SearchModal, { findDirectMatch } from '@/components/SearchModal';
 import { focusNextField } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
 import type {
@@ -24,6 +24,7 @@ import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import { amountToDebitCredit, debitCreditToAmount } from '@/lib/journalVoucherMath';
+import { useScrollLinesToEnd } from '@/hooks/useScrollLinesToEnd';
 
 /**
  * Journal Voucher — a real multi-line double-entry journal (legacy "Journal Entry" screen): N
@@ -225,6 +226,8 @@ export default function JournalVoucherPage() {
   const [date, setDate] = usePersistentField('journal-voucher', 'date', getTodayDate());
   const [reason, setReason] = usePersistentField('journal-voucher', 'reason', '');
   const [lines, setLines] = usePersistentField<UiLine[]>('journal-voucher', 'lines', []);
+  // Opening a saved voucher shows its LAST lines (document_page_standard.md §5).
+  const linesScrollRef = useScrollLinesToEnd(jvId, lines.length);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -381,6 +384,11 @@ export default function JournalVoucherPage() {
       e.preventDefault();
       e.stopPropagation();
       if (isViewMode || detailLocked) return;
+      // Text that already names exactly one account (e.g. the label of the account just picked)
+      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
+      // nothing because labels carry the parent account name (per the user, 2026-11-19).
+      const direct = findDirectMatch(accountOptions, entry.baSearchText);
+      if (direct) { handleEntryAccountSelect(direct); return; }
       setEntryAccountModalSeed(entry.baSearchText);
       setIsEntryAccountModalOpen(true);
     }
@@ -1367,7 +1375,7 @@ const nextJvNoPreview = useMemo(
               front of every row (JV-04, changes-14-09-26.md, 2026-09-15) removes it directly —
               active only while unposted and the page is in edit mode, same rule the entry strip
               fields below already apply. */}
-          <div className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+          <div ref={linesScrollRef} className="flex-1 min-h-0 mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>

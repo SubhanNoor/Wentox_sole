@@ -2,11 +2,17 @@
 // (request.input('name', sql.Type, value) and @name in the query text), no req/res.
 const { sql, query } = require('../db/pool');
 
-// PRODUCTION-only movement log, with date range + article/category search (Module 5.1's
-// reports:production — daily/weekly/monthly/overall filters are resolved to date_from/date_to by
-// the service, same convention as saleBills.service.js#resolveDateRange).
+// Production log for Module 5.1's reports:production — daily/weekly/monthly/overall filters are
+// resolved to date_from/date_to by the service, same convention as saleBills.service.js#resolveDateRange.
+//
+// Production is recorded through the Stock Voucher (2.24) now: it replaced the old inline
+// "+ Add Stock / Log Production" flow (commit e6e28026), and posting one writes its stock as
+// movement_type='ADJUSTMENT', source_type='STOCK_VOUCHER' — never 'PRODUCTION'. So this reads the
+// lines of CONFIRMED stock vouchers (which keep the cartons the user typed, unlike stock_movements),
+// UNION ALL any legacy movement_type='PRODUCTION' rows written before that change.
+// Voucher rows carry movement_id = -line_id so the two halves never share a row key.
 async function productionLog(filters = {}) {
-  const conditions = ["sm.movement_type = 'PRODUCTION'"];
+  const conditions = [];
   const params = {};
 
   if (filters.article_id) {
@@ -22,26 +28,47 @@ async function productionLog(filters = {}) {
     params.search = { type: sql.NVarChar(150), value: `%${filters.search}%` };
   }
   if (filters.date_from) {
-    conditions.push('sm.movement_date >= @dateFrom');
+    conditions.push('p.movement_date >= @dateFrom');
     params.dateFrom = { type: sql.Date, value: filters.date_from };
   }
   if (filters.date_to) {
-    conditions.push('sm.movement_date <= @dateTo');
+    conditions.push('p.movement_date <= @dateTo');
     params.dateTo = { type: sql.Date, value: filters.date_to };
   }
 
-  const where = `WHERE ${conditions.join(' AND ')}`;
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const result = await query(
-    `SELECT sm.*, ac.color, a.code AS article_code, a.name AS article_name, c.name AS category_name
-     FROM dbo.stock_movements sm
-     JOIN dbo.article_colors ac ON ac.variant_id = sm.variant_id
+    `SELECT p.*, COALESCE(p.snap_packing, ac.packing, a.packing) AS packing, ac.color, a.article_id, a.code AS article_code, a.name AS article_name, c.name AS category_name
+     FROM (
+       SELECT -l.line_id AS movement_id, l.variant_id, 'PRODUCTION' AS movement_type,
+              l.pairs AS qty_pairs, sv.voucher_date AS movement_date,
+              CAST(CASE WHEN l.cartons > 0 THEN l.cartons ELSE l.pairs END AS DECIMAL(12,1)) AS input_qty,
+              CASE WHEN l.cartons > 0 THEN 'CARTONS' ELSE 'PAIRS' END AS input_unit,
+              NULL AS snap_packing, sv.created_by, 'STOCK_VOUCHER' AS source_type, sv.stock_voucher_id AS source_id,
+              sv.stock_voucher_id AS sort_doc, l.line_no AS sort_line
+       FROM dbo.stock_voucher_lines l
+       JOIN dbo.stock_vouchers sv ON sv.stock_voucher_id = l.stock_voucher_id
+       WHERE sv.status = 'CONFIRMED'
+       UNION ALL
+       SELECT sm.movement_id, sm.variant_id, sm.movement_type, sm.qty_pairs, sm.movement_date,
+              CAST(sm.input_qty AS DECIMAL(12,1)), sm.input_unit, sm.packing, sm.created_by,
+              sm.source_type, sm.source_id, sm.movement_id, 0
+       FROM dbo.stock_movements sm
+       WHERE sm.movement_type = 'PRODUCTION'
+     ) p
+     JOIN dbo.article_colors ac ON ac.variant_id = p.variant_id
      JOIN dbo.articles a ON a.article_id = ac.article_id
      JOIN dbo.product_categories c ON c.category_id = a.category_id
      ${where}
-     ORDER BY sm.movement_date DESC, sm.movement_id DESC`,
+     ORDER BY p.movement_date DESC, p.sort_doc DESC, p.sort_line ASC`,
     params,
   );
-  return result.recordset;
+  // Voucher lines don't store packing, so packing above falls back to the variant's effective
+  // packing (article_colors override, else the article's).
+  return result.recordset.map(({ sort_doc, sort_line, snap_packing, ...row }) => ({
+    ...row,
+    input_qty: row.input_qty == null ? null : Number(row.input_qty),
+  }));
 }
 
 // UC-29/UC-38 Product Ledger — same shape as productionLog() above but across EVERY movement

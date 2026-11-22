@@ -390,6 +390,10 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                 &larr; Back to list
               </button>
             )}
+            {/* Account picker on the statement only (per the user, 2026-11-22): the list view lost
+                its "All accounts / All customers (list)" dropdown — the list IS all accounts — and
+                its space went to the search box below. */}
+            {showingStatement && (
             <div className="w-72">
               <SearchableSelect
                 options={accountOptions}
@@ -399,8 +403,9 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                 searchPlaceholder="Type a name..."
               />
             </div>
+            )}
             {!showingStatement && (
-              <div className="relative min-w-[220px]">
+              <div className="relative w-[520px] max-w-full">
                 <input
                   type="text"
                   placeholder={`Search code, name, main account${isAllScope ? ', category' : ''} or city...`}

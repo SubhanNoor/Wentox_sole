@@ -9116,3 +9116,24 @@ isn't queued, so a Posted pick made within that first IPC round-trip can still b
 - Tests: new `e2e/receiptsPayments.buttonStates.e2e.js` (both pages: read-only → Post/Print/PDF/Excel live; Detail+New → all greyed; Done on empty row → live again). Fails on the old code (2/2), passes on the new. Receipts/Payments/shortcut e2e 7/7, `tsc -b` clean.
 - Files: `frontend/src/pages/{Receipts,Expenses}Page.tsx`, `backend/e2e/receiptsPayments.buttonStates.e2e.js`, `System_architecture/document_page_gaps.md`.
 
+
+## 2026-11-18 — Production reports read Stock Vouchers; Pairs/Cartons switch; Quick Menu clean-up; vouchers open at their last line
+- **Production reports empty:** Daily/Weekly/Monthly/Overall Production read only `movement_type='PRODUCTION'`, which nothing writes since Stock Voucher replaced "+ Add Stock" (commit e6e28026; it posts `ADJUSTMENT`/`STOCK_VOUCHER`). `reports.repository.js#productionLog` now reads CONFIRMED stock voucher lines (cartons as typed, packing from the variant) UNION ALL legacy PRODUCTION rows; voucher rows carry `movement_id = -line_id`. Checked read-only on wentox_bak_20261106: 695 lines / 94,122 pairs = the posted voucher movements. Total row colSpan fixed (was 10 cells for 9 columns).
+- **Pairs/Cartons switch** on the production tabs (`ReportStockPage.tsx`), like the Product Ledger: last column and total in the chosen unit (cartons = pairs / packing per line, 2 dp), carried to Print Preview and Excel. Shared helpers moved to `frontend/src/lib/cartonQty.ts`.
+- **Quick Menu:** one-off removal (`AppLayout.tsx#removeRetiredShortcuts`, key `wento_quick_shortcuts_retired_2026-11-18`) of "Search" (Bilty Adda Updation) and "Home", matched by page or label; runs once per machine, other shortcuts untouched; Search dropped from the defaults and its backfill removed.
+- **Vouchers open at their last line** (document_page_standard.md §5): `frontend/src/hooks/useScrollLinesToEnd.ts`, wired into all 8 voucher pages; fires once per document loaded. Sale Bill, Sale Return, Purchase, Purchase Return and Stock Voucher had no grid scrollbar (card grew, page scrolled) — per the user, their card is now the window's height with `min-height: min-content` and the grid `[contain:size]`, so the grid scrolls inside itself but never drops under ~4 lines (2026-10-22 guard kept). §17 Receipts/Payments exception text brought up to date (2026-11-11 change).
+- Tests: new `e2e/documentLines.scrollToEnd.e2e.js` (40-line Stock Voucher opens at the end; at 420px tall the grid keeps ≥140px; failed before the layout change). Full e2e 37/37, backend 67/67, `tsc -b` clean.
+
+## 2026-11-19 — Receipts ONLINE "Received Into": Enter on a picked account reopened an empty picker
+- Bug (user report): with an account already in Received Into, Enter reopened the picker seeded with the full label "NAME (CODE) — PARENT". Search ignores the parent name (G-09), so "No matches found" and the keyboard walk was stuck.
+- Fix: the trigger's Enter first tries `findDirectMatch` (as Sale Bill's customer field already did) — text naming exactly one account picks it and moves to the next field; otherwise the picker opens as before. Applied to every account picker with this label shape: Receipts (A/C, Received Into), Payments (A/C, Paid-From/Drawn-On/endorsed cheque — modal pick moved into `selectSourceAccount`), Journal Voucher entry account.
+- Test: new `e2e/receipts.onlineReceivedInto.e2e.js` (failed before: picker reopened; passes now). Receipts/Payments/JV/Master-Detail/shortcut e2e 15/15, `tsc -b` clean.
+
+## 2026-11-19 — Reports Hub: "Account Ledger" tab button removed
+- Per the user, only the tab button goes: `ReportsHubPage.tsx` TABS entry marked `hidden` and filtered out of the tab bar, and its label renamed "Customer Report" (window title shows "Reports Hub — Customer Report"). The report stays reachable from menu 3.1 CUSTOMER REPORT (and any Quick Menu pin of it). Reports e2e 4/4 incl. Customer Report, `tsc -b` clean.
+
+## 2026-11-22 — Business Ledger / Customer Report list: account dropdown removed, wider search
+- Per the user: the list view's "All accounts (list)" / "All customers (list)" dropdown is gone; the search box takes its space (520px). The account dropdown stays on the statement view (next to Back to list), unchanged. `ReportKhaataPage.tsx#ReportKhaataContent`, shared by both reports. Checked by screenshot on wentox_test; reports e2e 4/4, `tsc -b` clean.
+
+## 2026-11-22 — Overall Trail / Vendor Balances / Customer Balances: "Jump to Account..." removed, wider search
+- Per the user, same as the Business Ledger list: the trial-balance list view's "Jump to Account..." dropdown is gone and the "Search code or description..." box takes its space (flex up to 640px). The ledger view keeps its own "Switch Account:" picker. One screen for all three reports: `OverallTrailContent.tsx`. Checked by screenshot (Customer Balances list + ledger) on wentox_test; reports e2e pass, `tsc -b` clean.

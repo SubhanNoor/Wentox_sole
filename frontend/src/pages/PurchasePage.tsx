@@ -25,6 +25,7 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 import { exportRowsToExcel } from '@/lib/export';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import { useScrollLinesToEnd } from '@/hooks/useScrollLinesToEnd';
 
 const UNIT_PRESETS = ['Meters', 'Buckles', 'KG', 'Pieces', 'Rolls'];
 
@@ -189,6 +190,8 @@ export default function PurchasePage() {
   // `items` holds only COMMITTED rows — the grid below the entry fields. The row currently being
   // typed lives separately in `currentRow` until Enter (or the Add button) commits it.
   const [items, setItems] = usePersistentField<UiItem[]>('purchase', 'items', []);
+  // Opening a saved voucher shows its LAST lines (document_page_standard.md §5).
+  const linesScrollRef = useScrollLinesToEnd(purchaseId, items.length);
   const [currentRow, setCurrentRow] = usePersistentField<CurrentRow>('purchase', 'currentRow', emptyCurrentRow());
   // Set while re-editing an existing grid row (clicked from the list below) — commit updates that
   // row in place instead of appending a new one. null means the entry fields are building a new row.
@@ -1409,7 +1412,7 @@ const nextSystemBillNo = useMemo(
           onSubmit={handleSave}
           className="card-white p-6 bg-white border flex flex-col"
           data-edit-scope="detail"
-          style={{ minHeight: invoiceCardHeight ?? undefined, position: 'relative' }}
+          style={{ height: invoiceCardHeight ?? undefined, minHeight: 'min-content', position: 'relative' }}
           data-no-print
         >
           <div className="shrink-0 flex items-center gap-2 border-b pb-3 mb-5">
@@ -1686,11 +1689,13 @@ const nextSystemBillNo = useMemo(
               would otherwise let this box's own content stretch the whole form instead of
               scrolling internally. The header row is `sticky` within the scroll box so column
               labels stay visible past the first screenful of rows. */}
-          {/* min-h-[140px] (about four lines), not min-h-0: in a short window the line-entry form opened
-              by Edit took every pixel the card had and the lines vanished (2026-10-22, once document
-              windows got shorter to clear the Quick Menu). Now the card grows past the window
-              instead — it is a minimum height, see above — and the page scrolls a little. */}
-          <div className="flex-1 min-h-[140px] mb-4 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+          {/* The lines scroll inside this box, and a saved document opens scrolled to its LAST line
+              (per the user 2026-11-18, useScrollLinesToEnd). The card is the window's height, but
+              min-height: min-content lets it grow when this box would drop under min-h-[140px] (about
+              four lines) — the 2026-10-22 guard: in a short window the line-entry form opened by Edit
+              must not squeeze the lines away; the page scrolls a little instead. [contain:size] keeps
+              the rows themselves out of that min-content, so a long document can't stretch the card. */}
+          <div ref={linesScrollRef} className="flex-1 min-h-[140px] mb-4 rounded-lg border bg-white overflow-y-auto [contain:size]" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>

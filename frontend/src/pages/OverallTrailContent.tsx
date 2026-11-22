@@ -493,8 +493,10 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
 
-                {/* Search Text Input */}
-                <div className="relative min-w-[200px] flex-1 max-w-xs">
+                {/* Search Text Input — also has the space the "Jump to Account..." dropdown used to
+                    take (removed per the user, 2026-11-22; clicking an account in the list opens
+                    its ledger, and the ledger view keeps its own Switch Account picker). */}
+                <div className="relative min-w-[260px] flex-1 max-w-[640px]">
                   <Search className="absolute left-3 top-2.5 text-slate-400" size={15} />
                   <input
                     ref={searchRef}
@@ -503,23 +505,6 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
                     value={searchQuery}
                     onChange={e => setSearchQuery(e.target.value)}
                     className="soleria-input pl-9 py-2 w-full text-xs font-semibold"
-                  />
-                </div>
-
-                {/* SearchableSelect Account Jump Dropdown */}
-                <div className="min-w-[260px] flex-1 max-w-xs">
-                  <SearchableSelect
-                    options={dropdownAccounts.map(acc => ({
-                      value: `${acc.type}-${acc.code}`,
-                      label: `${acc.code} — ${acc.description} (${acc.type_label})`
-                    }))}
-                    value=""
-                    onChange={(val: string) => {
-                      const acc = dropdownAccounts.find(a => `${a.type}-${a.code}` === val);
-                      if (acc) setSelectedAccount(acc);
-                    }}
-                    placeholder="Jump to Account..."
-                    searchPlaceholder="Type to search sub-accounts..."
                   />
                 </div>
 

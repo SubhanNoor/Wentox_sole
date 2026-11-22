@@ -32,6 +32,7 @@ import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import CartonsInput from '@/components/CartonsInput';
 import { getWindowParam } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import { useScrollLinesToEnd } from '@/hooks/useScrollLinesToEnd';
 
 interface UiItem {
   uid: string;
@@ -245,6 +246,8 @@ export default function SaleBillPage() {
 
   // Line items state
   const [items, setItems] = usePersistentField<UiItem[]>('sale-bill', 'items', []);
+  // Opening a saved voucher shows its LAST lines (document_page_standard.md §5).
+  const linesScrollRef = useScrollLinesToEnd(billId, items.length);
 
   const [deliveryType, setDeliveryType] = usePersistentField<'1' | 'custom'>('sale-bill', 'deliveryType', '1');
   // Ref-pic's literal "Delivery" field: a typed code, where "1" means SAME/direct delivery and
@@ -2019,7 +2022,7 @@ const nextSystemBillNo = useMemo(
           ref={invoiceCardRef}
           className="card-white shadow-sm p-3 md:p-4 flex flex-col"
           data-edit-scope="detail"
-          style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', minHeight: invoiceCardHeight ?? undefined, position: 'relative' }}
+          style={{ border: '1px solid var(--border-color)', background: '#ffffff', overflow: 'visible', height: invoiceCardHeight ?? undefined, minHeight: 'min-content', position: 'relative' }}
         >
 
           {/* Print Title (Visible only when printing) */}
@@ -2546,11 +2549,13 @@ const nextSystemBillNo = useMemo(
               the bill is already posted — see handleRowClick). No per-row delete button, per
               pages_design.md §4 — deleting a line item is the toolbar's own Delete button,
               enabled only while a row is selected here. */}
-          {/* min-h-[140px] (about four lines), not min-h-0: in a short window the line-entry form opened
-              by Edit took every pixel the card had and the lines vanished (2026-10-22, once document
-              windows got shorter to clear the Quick Menu). Now the card grows past the window
-              instead — it is a minimum height, see above — and the page scrolls a little. */}
-          <div className="flex-1 min-h-[140px] mb-2 rounded-lg border bg-white overflow-y-auto" style={{ borderColor: 'var(--border-color)' }}>
+          {/* The lines scroll inside this box, and a saved document opens scrolled to its LAST line
+              (per the user 2026-11-18, useScrollLinesToEnd). The card is the window's height, but
+              min-height: min-content lets it grow when this box would drop under min-h-[140px] (about
+              four lines) — the 2026-10-22 guard: in a short window the line-entry form opened by Edit
+              must not squeeze the lines away; the page scrolls a little instead. [contain:size] keeps
+              the rows themselves out of that min-content, so a long document can't stretch the card. */}
+          <div ref={linesScrollRef} className="flex-1 min-h-[140px] mb-2 rounded-lg border bg-white overflow-y-auto [contain:size]" style={{ borderColor: 'var(--border-color)' }}>
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b text-[11px] font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>

@@ -12,6 +12,7 @@ import { closePreviewWindow } from '@/components/reports/previewWindow';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import { qty, toCartons, roundCartons, cartonQty, type QtyUnit } from '@/lib/cartonQty';
 
 const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   PRODUCTION: 'Production',
@@ -33,7 +34,7 @@ const SOURCE_LABEL: Record<string, string> = {
 const movementLabel = (r: ProductLedgerRow) => (r.source_type && SOURCE_LABEL[r.source_type]) || MOVEMENT_TYPE_LABEL[r.movement_type];
 
 type ViewMode = 'summary' | 'detailed';
-type Unit = 'pairs' | 'cartons';
+type Unit = QtyUnit;
 
 const EMPTY_TOTALS = { opening: 0, in: 0, returned: 0, total_stock: 0, out: 0, balance: 0 };
 type QtyField = keyof typeof EMPTY_TOTALS;
@@ -41,20 +42,6 @@ const QTY_FIELDS = Object.keys(EMPTY_TOTALS) as QtyField[];
 
 const EMPTY_RESULT: ProductLedgerResult = {
   rows: [], total_in: 0, total_out: 0, net: 0, products: [], product_totals: EMPTY_TOTALS,
-};
-
-// Pairs as the report prints them: negatives in brackets, zero as a dash.
-const qty = (n: number) => (n === 0 ? '-' : n < 0 ? `(${Math.abs(n).toLocaleString()})` : n.toLocaleString());
-
-// Cartons as a decimal (per the user 2026-11-09): pairs / packing, to two places because a single
-// pair is under a tenth of a carton at the usual packing of 12. Whole cartons print without decimals.
-const toCartons = (n: number, packing: number) => n / (packing > 0 ? packing : 1);
-const roundCartons = (n: number) => Math.round(n * 100) / 100;
-const cartonQty = (n: number) => {
-  const r = roundCartons(n);
-  if (r === 0) return n === 0 ? '-' : '0';
-  const text = Math.abs(r).toLocaleString(undefined, { maximumFractionDigits: 2 });
-  return r < 0 ? `(${text})` : text;
 };
 
 const TH: React.CSSProperties = { border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left' };

@@ -14,6 +14,7 @@ import LiveReportDocument from '@/components/reports/LiveReportDocument';
 import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { getWindowParam, shouldAutoPreview, isChildWindow } from '@/lib/windowParams';
+import { qty, toCartons, roundCartons, cartonQty, type QtyUnit } from '@/lib/cartonQty';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
 
@@ -146,6 +147,8 @@ export default function ReportStockPage() {
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
   // Current Stock and Material Stock show stock "as on" this date (per the user, 2026-10-15).
   const [asOfDate, setAsOfDate] = useState(() => getWindowParam('asOfDate') || getTodayDate());
+  // Production tabs' Pairs/Cartons switch, like the Product Ledger's (per the user, 2026-11-18).
+  const [prodUnit, setProdUnit] = useState<QtyUnit>(() => (getWindowParam('unit') as QtyUnit) || 'pairs');
 
   const categoryIdParam = selectedCategory !== 'all' ? Number(selectedCategory) : undefined;
 
@@ -286,6 +289,10 @@ export default function ReportStockPage() {
   const totalProductionCartons = useMemo(() => filteredLogs.reduce((sum, log) => sum + (log.input_unit === 'CARTONS' ? (log.input_qty || 0) : 0), 0), [filteredLogs]);
   const totalProductionPairsDirect = useMemo(() => filteredLogs.reduce((sum, log) => sum + (log.input_unit === 'PAIRS' ? (log.input_qty || 0) : 0), 0), [filteredLogs]);
   const totalProductionPairs = useMemo(() => filteredLogs.reduce((sum, log) => sum + log.qty_pairs, 0), [filteredLogs]);
+  // Each line converts at its own packing, so cartons are added up line by line rather than
+  // converted from the pair total.
+  const totalProductionCartonsDecimal = useMemo(() => filteredLogs.reduce((sum, log) => sum + toCartons(log.qty_pairs, log.packing), 0), [filteredLogs]);
+  const prodUnitLabel = prodUnit === 'pairs' ? 'Pairs' : 'Cartons';
 
   const handleExportExcel = () => {
     if (activeStockTab === 'current') {
@@ -302,8 +309,8 @@ export default function ReportStockPage() {
       const rows = materialStockRows.map(r => [r.vendor_name, r.material_name, r.unit, r.purchased_qty, r.returned_qty, r.on_hand]);
       exportRowsToExcel('material-stock', headers, rows);
     } else {
-      const headers = ['Date', 'Article Name', 'Color', 'Category', 'Packing', 'Qty Added', 'Unit', 'Total Pairs'];
-      const rows = filteredLogs.map(log => [log.movement_date, log.article_name, log.color, log.category_name, log.packing ?? '', log.input_qty == null ? '' : formatCartons(log.input_qty), log.input_unit ?? '', log.qty_pairs]);
+      const headers = ['Date', 'Article Name', 'Color', 'Category', 'Packing', 'Qty Added', 'Unit', `Total ${prodUnitLabel}`];
+      const rows = filteredLogs.map(log => [log.movement_date, log.article_name, log.color, log.category_name, log.packing ?? '', log.input_qty == null ? '' : formatCartons(log.input_qty), log.input_unit ?? '', prodUnit === 'pairs' ? log.qty_pairs : roundCartons(toCartons(log.qty_pairs, log.packing))]);
       exportRowsToExcel(`production-${activeStockTab}`, headers, rows);
     }
   };
@@ -328,6 +335,7 @@ export default function ReportStockPage() {
       params.fromDate = fromDate;
       params.toDate = toDate;
     }
+    if (activeStockTab !== 'current' && activeStockTab !== 'material') params.unit = prodUnit;
     api.openWindow('report-stock', undefined, params);
   };
 
@@ -367,6 +375,11 @@ export default function ReportStockPage() {
             {(activeStockTab === 'current' || activeStockTab === 'material') && (
               <p style={{ margin: '3px 0 0 0', fontSize: '12px', fontWeight: 'bold', color: '#111111' }}>
                 Stock as on: {asOfDate ? formatDate(asOfDate) : formatDate(new Date())}
+              </p>
+            )}
+            {activeStockTab !== 'current' && activeStockTab !== 'material' && (
+              <p style={{ margin: '3px 0 0 0', fontSize: '11px', fontWeight: 'bold', color: '#111111' }}>
+                Totals in {prodUnit}
               </p>
             )}
             <p style={{ margin: '3px 0 0 0', fontSize: '11px', color: '#555555' }}>
@@ -464,7 +477,7 @@ export default function ReportStockPage() {
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'center', width: '8%' }}>Packing</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '8%' }}>Qty</th>
                 <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'left', width: '8%' }}>Unit</th>
-                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '10%' }}>Total Pairs</th>
+                <th style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', backgroundColor: '#f2f2f2', fontWeight: 'bold', textAlign: 'right', width: '10%' }}>Total {prodUnitLabel}</th>
               </tr>
             </thead>
             <tbody>
@@ -485,12 +498,12 @@ export default function ReportStockPage() {
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'center', fontFamily: 'monospace' }}>{log.packing}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{formatCartons(log.input_qty)}</td>
                     <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textTransform: 'capitalize', color: REPORT_COLORS.muted }}>{log.input_unit?.toLowerCase()}</td>
-                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{log.qty_pairs.toLocaleString()}</td>
+                    <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '10.5px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace' }}>{prodUnit === 'pairs' ? qty(log.qty_pairs) : cartonQty(toCartons(log.qty_pairs, log.packing))}</td>
                   </tr>
                 ))
               )}
               <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f9f9f9' }}>
-                <td colSpan={7} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>PRODUCTION TOTAL</td>
+                <td colSpan={6} style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>PRODUCTION TOTAL</td>
                 <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace' }}>
                   {totalProductionCartons > 0 && `${formatCartons(totalProductionCartons)} ctn`}
                   {totalProductionCartons > 0 && totalProductionPairsDirect > 0 && ' + '}
@@ -498,7 +511,7 @@ export default function ReportStockPage() {
                   {totalProductionCartons === 0 && totalProductionPairsDirect === 0 && '-'}
                 </td>
                 <td style={{ border: '1px solid #000000', padding: '6px' }}></td>
-                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{totalProductionPairs.toLocaleString()}</td>
+                <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{prodUnit === 'pairs' ? qty(totalProductionPairs) : cartonQty(totalProductionCartonsDecimal)}</td>
               </tr>
             </tbody>
           </table>
@@ -646,6 +659,21 @@ export default function ReportStockPage() {
                       onChange={e => setAsOfDate(e.target.value)}
                       className="soleria-input py-1.5 px-3 text-xs font-semibold"
                     />
+                  </div>
+                )}
+                {activeStockTab !== 'current' && activeStockTab !== 'material' && (
+                  <div className="flex items-center gap-1 rounded-xl border p-0.5 shrink-0" style={{ borderColor: 'var(--border-color)' }} role="group" aria-label="Unit">
+                    {(['pairs', 'cartons'] as const).map(u => (
+                      <button
+                        key={u}
+                        type="button"
+                        onClick={() => setProdUnit(u)}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer ${prodUnit === u ? 'bg-[var(--brand-navy)] text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                        aria-pressed={prodUnit === u}
+                      >
+                        {u === 'pairs' ? 'Pairs' : 'Cartons'}
+                      </button>
+                    ))}
                   </div>
                 )}
                 <div className="w-44 shrink-0">

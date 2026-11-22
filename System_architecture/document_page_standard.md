@@ -131,6 +131,15 @@ Rules:
 - **▶ marker on delete:** deleting the marked row moves the marker to the row that takes its place
   (or the new last row); deleting a row above it shifts it up by one.
 - The marked row scrolls into view automatically.
+- **Opening a saved document shows its last lines.** Whenever a saved document is put on screen —
+  reopening the window, First / Pre. / Next / Last, Find, switching Posted / Unposted — the lines
+  grid starts **scrolled to the end**, posted or unposted alike. This happens once per document;
+  adding, editing or deleting a line afterwards follows the ▶ marker instead. Shared hook:
+  `frontend/src/hooks/useScrollLinesToEnd.ts`.
+- **The grid scrolls inside itself.** The document card is the window's height and the lines grid
+  takes the rest of it with its own scrollbar, so the toolbar and header never scroll away. The
+  grid never shrinks below about four lines (140px): in a short window the card grows instead and
+  the page scrolls a little (the 2026-10-22 guard).
 
 ## 6. Master / Detail — the edit flow
 
@@ -329,7 +338,7 @@ Deliberate differences from the rules above, each confirmed by the user.
 
 | Page | Exception | Why |
 |---|---|---|
-| **Receipts, Payments** | **Each entry is saved to the server as it is added** (draft lines), instead of lines living on screen until Save. So Save and Done do the same thing, **Save+Post is off**, and a voucher being filled in stays in "new" mode rather than reaching view mode — which is why **Print / PDF / Excel stay enabled** whenever a voucher is on screen. Deleting an entry is immediate (password-gated) rather than "removed at the next Save". Everything else — row selection, Edit / Edit Row on the selected entry, New + Detail, Cancel, Un Post landing read-only, last-entry delete, numbering — follows the standard. | Per-entry saving is the RJ-03 design (a day's takings as one voucher); kept by the user 2026-10-06. |
+| **Receipts, Payments** | **Each entry is saved to the server as it is added** (draft lines), instead of lines living on screen until Save. So **Save+Post is off**. **Done on an empty entry row** finishes the voucher and makes it read-only, like the JV's Done; **Post, Un Post, Print, PDF and Excel** work only on a read-only voucher (2026-11-11). Deleting an entry is immediate (password-gated) rather than "removed at the next Save". Everything else — row selection, Edit / Edit Row on the selected entry, New + Detail, Cancel, Un Post landing read-only, last-entry delete, numbering — follows the standard. | Per-entry saving is the RJ-03 design (a day's takings as one voucher); kept by the user 2026-10-06. |
 | **Sale Bill** | A **posted** bill can still have its **bilty / adda** details edited (UC-07), opened through the Find & Update tab's Edit; saving asks for the password. | Bilty / adda arrive after posting. |
 | **Receipts** | A standalone endorsement (settlement) is its own one-line document: Edit unlocks its fields directly. | It has no header/lines split. |
 
@@ -354,3 +363,5 @@ These were decided on the Journal Voucher page and are the shared standard.
 | 2026-09-30 | New enabled on the Posted view; dropdown always follows the document on screen; a user's dropdown choice is never overwritten by the auto-open |
 | 2026-10-05 | Exit closes the document window and brings the main window forward. **The flow is approved as final** |
 | 2026-10-06 | **Rolled out to every document page** (Sale Bill, Sale Return, Purchase, Purchase Return, Receipts, Payments, Stock Voucher). User rulings: the Master/Detail flow replaces G-08 and the 2026-08-31 rules everywhere; Post always clears (SB-05/P-02 dropped); deleted numbers are no longer browse stops; Receipts/Payments/Stock Voucher numbers come from never-reused sequences (migration 042, reversing the 2026-09-07 reuse); Receipts/Payments keep per-entry saving (§17) |
+| 2026-11-11 | Receipts/Payments: Done on an empty entry row makes the voucher read-only; Post, Un Post, Print, PDF, Excel only on a read-only voucher (§17 updated) |
+| 2026-11-18 | Opening a saved document scrolls its lines grid to the end, on every document page ([§5](#5-the-lines-grid)) |

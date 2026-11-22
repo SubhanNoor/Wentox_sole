@@ -4,7 +4,7 @@ import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
 import DocumentToolbar from '@/components/DocumentToolbar';
 import RowActions from '@/components/RowActions';
-import SearchModal from '@/components/SearchModal';
+import SearchModal, { findDirectMatch } from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
   VendorRow, BankAccountRow, BusinessAccountRow, ChequeRow, ChequeAllocationRow,
@@ -28,6 +28,7 @@ import EditScopeRadios from '@/components/EditScopeRadios';
 import { useAutoEditScope } from '@/hooks/useAutoEditScope';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { useDataVersion } from '@/hooks/useDataVersion';
+import { useScrollLinesToEnd } from '@/hooks/useScrollLinesToEnd';
 
 const today = () => new Date().toISOString().split('T')[0];
 
@@ -298,6 +299,8 @@ export default function ExpensesPage() {
   // read-only, like the Journal Voucher's Done (per the user, 2026-11-11). Save has nothing to do then.
   const canFinishVoucher = !isViewMode && mode !== 'edit' && !baId && amount <= 0 && (voucher?.lines?.length ?? 0) > 0;
   const voucherLines = voucher?.lines ?? [];
+  // Opening a saved voucher shows its LAST lines (document_page_standard.md §5).
+  const linesScrollRef = useScrollLinesToEnd(expenseId, voucherLines.length);
 
   // PN-01: ref target for the post-Done cursor return — the first field of the entry row. The form
   // never unmounts between lines, so the app-wide G-01 auto-focus never re-fires and focus has to be
@@ -424,6 +427,11 @@ export default function ExpensesPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
+      // Text that already names exactly one account (e.g. the label of the account just picked)
+      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
+      // nothing because labels carry the parent account name (per the user, 2026-11-19).
+      const direct = findDirectMatch(accountOptions, accountSearchText);
+      if (direct) { handleAccountSelect(direct); return; }
       setAccountModalSeed(accountSearchText);
       setIsAccountModalOpen(true);
     }
@@ -493,9 +501,25 @@ export default function ExpensesPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
+      // Text that already names exactly one account (e.g. the label of the account just picked)
+      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
+      // nothing because labels carry the parent account name (per the user, 2026-11-19).
+      const direct = findDirectMatch(paymentMode === 'CHEQUE_ENDORSED' ? endorsableCheques : bankOptions, sourceAccountSearchText);
+      if (direct) { selectSourceAccount(direct); return; }
       setSourceAccountModalSeed(sourceAccountSearchText);
       setIsSourceAccountModalOpen(true);
     }
+  }
+
+  // The source-account modal's pick, shared with the trigger's direct-match Enter above.
+  function selectSourceAccount(val: string) {
+    if (paymentMode === 'CHEQUE_ENDORSED') {
+      handleSelectEndorsedCheque(val);
+    } else {
+      setBankId(val);
+    }
+    setIsSourceAccountModalOpen(false);
+    requestAnimationFrame(() => focusNextField(sourceAccountTriggerRef.current));
   }
 
   const resetModeFields = () => {
@@ -1590,15 +1614,7 @@ export default function ExpensesPage() {
                   }
                   options={paymentMode === 'CHEQUE_ENDORSED' ? endorsableCheques : bankOptions}
                   value={paymentMode === 'CHEQUE_ENDORSED' ? chequeId : bankId}
-                  onSelect={val => {
-                    if (paymentMode === 'CHEQUE_ENDORSED') {
-                      handleSelectEndorsedCheque(val);
-                    } else {
-                      setBankId(val);
-                    }
-                    setIsSourceAccountModalOpen(false);
-                    requestAnimationFrame(() => focusNextField(sourceAccountTriggerRef.current));
-                  }}
+                  onSelect={selectSourceAccount}
                   onClose={() => setIsSourceAccountModalOpen(false)}
                   searchPlaceholder={
                     paymentMode === 'CHEQUE_ENDORSED'
@@ -1625,7 +1641,7 @@ export default function ExpensesPage() {
                 {/* G-04 (changes-14-09-26.md, 2026-09-15): only this table scrolls — everything
                     above (header, entry form) and below (totals footer) stays fixed, per the
                     client's own reference screenshot. */}
-                <div className="overflow-auto flex-1 min-h-0">
+                <div ref={linesScrollRef} className="overflow-auto flex-1 min-h-0">
                   <table className="w-full text-left border-collapse text-sm">
                     <thead>
                       <tr className="bg-slate-50 border-b text-xs font-semibold uppercase tracking-wider text-slate-500" style={{ borderColor: 'var(--border-color)' }}>

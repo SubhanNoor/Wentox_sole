@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   Settings, LogOut, ChevronDown, Home,
-  Pin, BookmarkPlus, ArrowDownToLine
+  Pin, BookmarkPlus, ArrowDownToLine, X
 } from 'lucide-react';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
@@ -47,10 +47,8 @@ const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   // shortcut, same as before, just pointing at the new page instead of Current Stock Report.
   { id: 'default_stock-voucher', label: 'Stock', page: 'stock-voucher' },
   { id: 'default_search-customer', label: 'Search Customer', page: 'search-customer' },
-  // Bilty Adda Updation's page title is "Search & Bilty Adda Updation" — too long for a shortcut
-  // chip, so this default carries its own short label rather than relying on self-pin (which
-  // always uses the page's own title verbatim, with no rename option).
-  { id: 'default_bilty-update', label: 'Search', page: 'bilty-update' },
+  // "Search" (Bilty Adda Updation) was a default here until the user had it taken off the bar,
+  // 2026-11-18 — see removeRetiredShortcuts() below.
   { id: 'default_backup', label: 'Backup', page: 'settings', tab: 'backup' },
 ];
 
@@ -65,50 +63,39 @@ const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
 const SHORTCUTS_SEED_KEY = 'wento_quick_shortcuts_seed';
 const SHORTCUTS_SEED_VERSION = '2026-08-26c';
 
-// One-off backfill for a machine that was already seeded before a given shortcut existed in
-// DEFAULT_SHORTCUTS — ensures it's present with the given label, instead of bumping
-// SHORTCUTS_SEED_VERSION, which would silently replace the user's entire customized bar just to
-// add one shortcut. If the page was already pinned under a different label (e.g. self-pinned via
-// "+ Pin Page to Bar", which always uses the page's own title verbatim), that label is corrected
-// rather than left alone — this is the one thing an insert-only backfill got wrong the first time
-// (v1 found "Search & Bilty Adda Updation" already pinned and left it as-is). Runs once per
-// (backfill key, machine); bump the key's version suffix if the label/page needs fixing again.
-function ensureShortcutLabel(list: QuickShortcut[], shortcut: QuickShortcut, version: string): QuickShortcut[] {
-  const backfillKey = `wento_quick_shortcuts_backfill_${shortcut.id}_${version}`;
-  if (localStorage.getItem(backfillKey)) return list;
-  localStorage.setItem(backfillKey, '1');
-  const idx = list.findIndex(s => s.page === shortcut.page && s.tab === shortcut.tab);
-  let updated: QuickShortcut[];
-  if (idx === -1) {
-    updated = [...list, shortcut];
-  } else if (list[idx].label !== shortcut.label) {
-    updated = list.map((s, i) => (i === idx ? { ...s, label: shortcut.label } : s));
-  } else {
-    return list;
-  }
+// One-off removal (per the user, 2026-11-18): take "Search" (Bilty Adda Updation) and "Home" off
+// every machine's bar — including a self-pinned "Home", which is why this matches on label as well
+// as page. Runs once per machine (keyed by RETIRED_SHORTCUTS_KEY) rather than on every load, so a
+// client who pins either one back later keeps it. Every other shortcut, default or self-pinned, is
+// left exactly as it was — unlike bumping SHORTCUTS_SEED_VERSION, which would reset the whole bar.
+const RETIRED_SHORTCUTS_KEY = 'wento_quick_shortcuts_retired_2026-11-18';
+const isRetiredShortcut = (s: QuickShortcut) =>
+  s.page === 'bilty-update' || s.page === 'home' || s.label === 'Search' || s.label === 'Home';
+
+function removeRetiredShortcuts(list: QuickShortcut[]): QuickShortcut[] {
+  if (localStorage.getItem(RETIRED_SHORTCUTS_KEY)) return list;
+  const updated = list.filter(s => !isRetiredShortcut(s));
   localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
+  localStorage.setItem(RETIRED_SHORTCUTS_KEY, '1');
   return updated;
 }
-
-const BILTY_UPDATE_SHORTCUT: QuickShortcut = { id: 'default_bilty-update', label: 'Search', page: 'bilty-update' };
 
 function loadShortcuts(): QuickShortcut[] {
   if (localStorage.getItem(SHORTCUTS_SEED_KEY) !== SHORTCUTS_SEED_VERSION) {
     localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(DEFAULT_SHORTCUTS));
     localStorage.setItem(SHORTCUTS_SEED_KEY, SHORTCUTS_SEED_VERSION);
-    // A fresh seed already carries every DEFAULT_SHORTCUTS entry — mark this backfill done too,
-    // so it doesn't immediately re-run against the very next load.
-    localStorage.setItem(`wento_quick_shortcuts_backfill_${BILTY_UPDATE_SHORTCUT.id}_v2`, '1');
+    // A fresh seed has none of the retired shortcuts — mark that removal done too.
+    localStorage.setItem(RETIRED_SHORTCUTS_KEY, '1');
     return DEFAULT_SHORTCUTS;
   }
   // Already seeded, so from here on the user's own bar wins — including an empty one they cleared
   // themselves, which is why this returns [] rather than re-seeding.
   const saved = localStorage.getItem(SHORTCUTS_STORAGE_KEY);
-  if (!saved) return ensureShortcutLabel([], BILTY_UPDATE_SHORTCUT, 'v2');
+  if (!saved) return [];
   try {
     const parsed = JSON.parse(saved);
     if (!Array.isArray(parsed)) return DEFAULT_SHORTCUTS;
-    return ensureShortcutLabel(parsed, BILTY_UPDATE_SHORTCUT, 'v2');
+    return removeRetiredShortcuts(parsed);
   } catch {
     return DEFAULT_SHORTCUTS;
   }
@@ -408,6 +395,15 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
   };
 
+  // Remove one pinned shortcut (per the user, 2026-11-18 — the bar had no way to take one off).
+  // Saved like a pin, so it stays gone after a restart; + Pin Page to Bar can put it back.
+  // Not undone by the seed/backfill in loadShortcuts(): those run once per version, never again.
+  const handleRemoveShortcut = (id: string) => {
+    const updated = shortcuts.filter(s => s.id !== id);
+    setShortcuts(updated);
+    localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
+  };
+
   const handleDropShortcut = (e: React.DragEvent) => {
     try {
       const raw = e.dataTransfer.getData('text/plain');
@@ -633,7 +629,7 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
                   return (
                     <div
                       key={s.id}
-                      className={`flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold transition-all shadow-2xs border ${
+                      className={`group flex items-center gap-1 pl-3 pr-1.5 py-1 rounded-full text-xs font-bold transition-all shadow-2xs border ${
                         isActive
                           ? 'bg-[#111c2a] text-[#B08D57] border-[#111c2a]'
                           : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200 hover:border-amber-400'
@@ -649,6 +645,15 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
                         className="cursor-pointer font-semibold hover:underline"
                       >
                         {s.label}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveShortcut(s.id)}
+                        title={`Remove "${s.label}" from Quick Menu`}
+                        aria-label={`Remove ${s.label} from Quick Menu`}
+                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 rounded-full p-0.5 text-slate-400 hover:text-white hover:bg-rose-600 transition-all cursor-pointer"
+                      >
+                        <X size={11} />
                       </button>
                     </div>
                   );
