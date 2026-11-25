@@ -299,7 +299,7 @@ export default function ExpensesPage() {
   const canSaveEntry = !isViewMode && !awaitingNew && (isHeaderEditing ? !!date : !!baId && amount > 0);
   const voucherLines = voucher?.lines ?? [];
   // Opening a saved voucher shows its LAST lines (document_page_standard.md §5).
-  const linesScrollRef = useScrollLinesToEnd(expenseId, voucherLines.length);
+  const linesScrollRef = useScrollLinesToEnd(voucher?.voucher_id, voucherLines.length);
 
   // PN-01: ref target for the post-Done cursor return — the first field of the entry row. The form
   // never unmounts between lines, so the app-wide G-01 auto-focus never re-fires and focus has to be

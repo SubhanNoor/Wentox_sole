@@ -19,7 +19,25 @@ export function useScrollLinesToEnd<T extends HTMLElement = HTMLDivElement>(docK
     if (lineCount === 0 || scrolledFor.current === docKey) return;
     scrolledFor.current = docKey;
     const el = containerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const toEnd = () => { el.scrollTop = el.scrollHeight; };
+    toEnd();
+
+    // The grid can still change size just after this (card height measured, balances and banners
+    // arriving), which left it a few pixels short of the end. Hold the end while it settles; the
+    // user's first scroll, click or key press lets go at once.
+    const observer = new ResizeObserver(toEnd);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    const userEvents = ['wheel', 'pointerdown', 'keydown', 'touchstart'] as const;
+    const release = () => {
+      observer.disconnect();
+      clearTimeout(timer);
+      userEvents.forEach(name => window.removeEventListener(name, release, true));
+    };
+    const timer = setTimeout(release, 1500);
+    userEvents.forEach(name => window.addEventListener(name, release, true));
+    return release;
   }, [docKey, lineCount]);
 
   return containerRef;

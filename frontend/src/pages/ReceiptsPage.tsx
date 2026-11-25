@@ -357,7 +357,7 @@ export default function ReceiptsPage() {
 
   const voucherLines = voucher?.lines ?? [];
   // Opening a saved voucher shows its LAST lines (document_page_standard.md §5).
-  const linesScrollRef = useScrollLinesToEnd(receiptId, voucherLines.length);
+  const linesScrollRef = useScrollLinesToEnd(voucher?.voucher_id, voucherLines.length);
 
   // RJ-03: wraps the first entry field (the account picker) so Done/New can put the cursor back on
   // it. The form does not unmount between lines, so the app-wide G-01 auto-focus never re-fires and
