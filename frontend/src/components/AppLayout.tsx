@@ -36,6 +36,8 @@ interface QuickShortcut {
 // used often enough day-to-day to be worth one click from anywhere. Cash Book and Business Ledger
 // live as sub-tabs of the Reports Hub page, so they're pinned via `tab`, same as clicking their
 // own "+ Pin Page to Bar" would produce.
+const BILTY_ADDA_SHORTCUT: QuickShortcut = { id: 'default_setup-adda', label: 'BILTY ADDA', page: 'setup-adda' };
+
 const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   { id: 'default_sale-bill', label: 'Sale Bill', page: 'sale-bill' },
   { id: 'default_purchase-entry', label: 'Purchase', page: 'purchase-entry' },
@@ -46,10 +48,10 @@ const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   // Stock Voucher is the module's main entry point now (per the user, 2026-08-26) — one "Stock"
   // shortcut, same as before, just pointing at the new page instead of Current Stock Report.
   { id: 'default_stock-voucher', label: 'Stock', page: 'stock-voucher' },
-  { id: 'default_search-customer', label: 'Search Customer', page: 'search-customer' },
   // "Search" (Bilty Adda Updation) was a default here until the user had it taken off the bar,
   // 2026-11-18 — see removeRetiredShortcuts() below.
   { id: 'default_backup', label: 'Backup', page: 'settings', tab: 'backup' },
+  BILTY_ADDA_SHORTCUT,
 ];
 
 // Where the bar is stored, and which generation of DEFAULT_SHORTCUTS has been published to this
@@ -80,22 +82,38 @@ function removeRetiredShortcuts(list: QuickShortcut[]): QuickShortcut[] {
   return updated;
 }
 
+// One-off correction (per the user, 2026-11-25): BILTY ADDA was taken off the client's bar by
+// mistake when Search Customer was the one meant to go. Puts BILTY ADDA back and removes Search
+// Customer. A machine that still has BILTY ADDA keeps it where it is, with no second copy. Runs
+// once per machine, so either one can be pinned or unpinned freely afterwards.
+const ADDA_SWAP_KEY = 'wento_quick_shortcuts_adda_swap_2026-11-25';
+
+function swapSearchCustomerForBiltyAdda(list: QuickShortcut[]): QuickShortcut[] {
+  if (localStorage.getItem(ADDA_SWAP_KEY)) return list;
+  const updated = list.filter(s => s.page !== 'search-customer');
+  if (!updated.some(s => s.page === BILTY_ADDA_SHORTCUT.page)) updated.push(BILTY_ADDA_SHORTCUT);
+  localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
+  localStorage.setItem(ADDA_SWAP_KEY, '1');
+  return updated;
+}
+
 function loadShortcuts(): QuickShortcut[] {
   if (localStorage.getItem(SHORTCUTS_SEED_KEY) !== SHORTCUTS_SEED_VERSION) {
     localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(DEFAULT_SHORTCUTS));
     localStorage.setItem(SHORTCUTS_SEED_KEY, SHORTCUTS_SEED_VERSION);
-    // A fresh seed has none of the retired shortcuts — mark that removal done too.
+    // A fresh seed already reflects both one-off changes — mark them done too.
     localStorage.setItem(RETIRED_SHORTCUTS_KEY, '1');
+    localStorage.setItem(ADDA_SWAP_KEY, '1');
     return DEFAULT_SHORTCUTS;
   }
   // Already seeded, so from here on the user's own bar wins — including an empty one they cleared
   // themselves, which is why this returns [] rather than re-seeding.
   const saved = localStorage.getItem(SHORTCUTS_STORAGE_KEY);
-  if (!saved) return [];
+  if (!saved) return swapSearchCustomerForBiltyAdda([]);
   try {
     const parsed = JSON.parse(saved);
     if (!Array.isArray(parsed)) return DEFAULT_SHORTCUTS;
-    return removeRetiredShortcuts(parsed);
+    return swapSearchCustomerForBiltyAdda(removeRetiredShortcuts(parsed));
   } catch {
     return DEFAULT_SHORTCUTS;
   }
