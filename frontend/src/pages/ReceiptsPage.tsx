@@ -5,7 +5,7 @@ import AppLayout from '@/components/AppLayout';
 import DocumentToolbar from '@/components/DocumentToolbar';
 import RowActions from '@/components/RowActions';
 import SearchableSelect from '@/components/SearchableSelect';
-import SearchModal, { findDirectMatch } from '@/components/SearchModal';
+import SearchModal, { unchangedPick } from '@/components/SearchModal';
 import PageToasts from '@/components/PageToasts';
 import * as api from '@/lib/api';
 import type { CustomerRow, BusinessAccountRow, RegionRow, CityRow, BankAccountRow, ReceiptCreateInput, SettlementCreateInput, SettlementRow, ReceiptVoucherRow, VoucherActionResult, DeletedNumberRow } from '@/lib/api';
@@ -465,15 +465,6 @@ export default function ReceiptsPage() {
       ? !!date
       : !!baId && amount > 0 && (!isEndorsed || !!endorseToBaId)
   );
-  // Done on an EMPTY entry row with entries already saved = "finished with this voucher": it goes
-  // read-only, like the Journal Voucher's Done (per the user, 2026-11-11). Save has nothing to do then.
-  // The same "untouched row" test handleDone uses (entryRowUntouched), plus Endorse unticked (an
-  // endorsed Done always saves an endorsement): since Post needs the voucher read-only (2026-11-13),
-  // a Done that looks finishable but then says "select an account" would leave Post greyed out.
-  const canFinishVoucher = !isViewMode && mode !== 'edit' && !isEndorsed && !baId && amount <= 0
-    && !remarks.trim() && !details.trim() && !chequeNo.trim() && !chequeDate
-    && (voucher?.lines?.length ?? 0) > 0;
-
   // A receipt can name ANY business account, not just a customer's (migration 014) — the same
   // freedom the Expenses/Naam side has always had.
   const selectedAccount = useMemo(
@@ -560,10 +551,9 @@ export default function ReceiptsPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      // Text that already names exactly one account (e.g. the label of the account just picked)
-      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
-      // nothing because labels carry the parent account name (per the user, 2026-11-19).
-      const direct = findDirectMatch(accountOptions, accountSearchText);
+      // Still showing the picked account: move on, never reopening the list searching its full label
+      // (which matches nothing — labels carry the parent account name). Typed text opens the list.
+      const direct = unchangedPick(baId, accountOptions.find(o => o.value === baId)?.label, accountSearchText);
       if (direct) { handleAccountSelect(direct); return; }
       setAccountModalSeed(accountSearchText);
       setIsAccountModalOpen(true);
@@ -604,10 +594,9 @@ export default function ReceiptsPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      // Text that already names exactly one account (e.g. the label of the account just picked)
-      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
-      // nothing because labels carry the parent account name (per the user, 2026-11-19).
-      const direct = findDirectMatch(bankOptions, bankSearchText);
+      // Still showing the picked account: move on, never reopening the list searching its full label
+      // (which matches nothing — labels carry the parent account name). Typed text opens the list.
+      const direct = unchangedPick(bankId, bankOptions.find(o => o.value === bankId)?.label, bankSearchText);
       if (direct) { handleBankSelect(direct); return; }
       setBankModalSeed(bankSearchText);
       setIsBankModalOpen(true);
@@ -807,8 +796,8 @@ export default function ReceiptsPage() {
   // Creates the voucher on first use (see the `voucher` state note). An endorsement is NOT a
   // receipt — it lives in dbo.settlements, has no cash/bank leg and no voucher_id — so it still
   // saves through its own path and never joins the grid.
-  const handleDone = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleDone = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     if (isEndorsed) {
       // A standalone endorsement saved before endorsements joined vouchers keeps its own path;
       // anything else endorsed is a line of the voucher on screen.
@@ -833,31 +822,6 @@ export default function ReceiptsPage() {
       refreshAllVouchers();
       clearEntryRow();
       flash('Voucher header updated.');
-      return;
-    }
-
-    // Done on an UNTOUCHED entry row means "I'm finished with this voucher", not "commit this
-    // row" — reported by the user (2026-08-31) after adding two entries and being told to
-    // "select an account" when there was nothing left to add. Every line is already saved in
-    // draft_receipts by the Done that committed it, so there is genuinely nothing to write here
-    // and refusing was just noise. Say what state the voucher is in and point at Post, rather
-    // than silently doing nothing.
-    //
-    // Deliberately only when the row is COMPLETELY untouched: if any field is filled the user
-    // was part-way through an entry, so the normal per-field validation below still runs and
-    // tells them what is missing instead of quietly discarding what they typed.
-    const entryRowUntouched = !baId && amount <= 0 && !remarks.trim() && !details.trim()
-      && !chequeNo.trim() && !chequeDate && mode !== 'edit';
-    if (entryRowUntouched) {
-      if (voucher && voucherLines.length > 0) {
-        flash(`Voucher saved — ${voucherLines.length} ${voucherLines.length === 1 ? 'entry' : 'entries'}. Press Post to send it to the ledger.`);
-        // Finished: read-only, like the Journal Voucher's Done; focus on New for the next voucher.
-        setMode('view');
-        setEditTarget(null);
-        focusNewButton();
-      } else {
-        setErrorMsg('Add at least one entry before finishing this voucher.');
-      }
       return;
     }
 
@@ -898,6 +862,24 @@ export default function ReceiptsPage() {
       return;
     }
     await finishLine(firstTry, openVoucher);
+  };
+
+  // The toolbar's Done: finish the voucher. It never adds the entry being typed — only Enter (or
+  // Save) does — so that is thrown away, and a line being edited keeps its old values (per the
+  // user, 2026-11-25). The header edit and a standalone endorsement have no entry line; Done still
+  // saves those.
+  const handleFinish = async () => {
+    if (isHeaderEditing || isSettlementDoc) { await handleDone(); return; }
+    clearEntryRow();
+    if (!voucher || voucherLines.length === 0) {
+      setErrorMsg('Not saved to Unposted — there are no entries. Add one with Enter first.');
+      return;
+    }
+    flash(`Voucher saved — ${voucherLines.length} ${voucherLines.length === 1 ? 'entry' : 'entries'}. Press Post to send it to the ledger.`);
+    // Finished: read-only, like the Journal Voucher's Done; focus on New for the next voucher.
+    setMode('view');
+    setEditTarget(null);
+    focusNewButton();
   };
 
   // Everything after a line's save call — shared by a normal Done and a Done repeated from the
@@ -954,11 +936,16 @@ export default function ReceiptsPage() {
     setVoucherResult({ action: 'post', data: res.data });
     setVoucher(res.data.voucher);
     setBalanceRefreshKey(k => k + 1);
-    refreshAllVouchers();
 
     if (res.data.failed.length === 0) {
-      flash(`Voucher ${voucher.voucher_no} posted — ${res.data.posted?.length ?? 0} entr${(res.data.posted?.length ?? 0) === 1 ? 'y' : 'ies'}. Ready for the next voucher.`);
-      resetToNewVoucher();
+      flash(`Voucher ${voucher.voucher_no} posted — ${res.data.posted?.length ?? 0} entr${(res.data.posted?.length ?? 0) === 1 ? 'y' : 'ies'}.`);
+    }
+    // Fully posted and others still unposted: open the latest of them, as Delete does (per the
+    // user, 2026-11-25). None left: a blank voucher. A partial post stays on screen.
+    const fresh = await refreshAllVouchers();
+    if (res.data.failed.length === 0) {
+      if (fresh?.some(v => v.status !== 'POSTED')) await handleNavFilterChange('unposted');
+      else resetToNewVoucher();
     }
   };
 
@@ -1680,7 +1667,7 @@ export default function ReceiptsPage() {
               title: editScope === 'detail' ? 'Edit the selected entry' : 'Edit the header fields',
             }}
             save={{ submit: true, form: 'receipt-entry-form', disabled: !canSaveEntry, title: 'Save this entry into the voucher' }}
-            done={{ submit: true, form: 'receipt-entry-form', disabled: !canSaveEntry && !canFinishVoucher, title: isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — add this entry to the voucher' }}
+            done={{ onClick: handleFinish, disabled: isHeaderEditing || isSettlementDoc ? !canSaveEntry : isViewMode || awaitingNew, title: isHeaderEditing ? 'Update Voucher Header' : 'Done — finish this voucher, then Post it' }}
             // Cancel drops the unsaved correction and reloads the saved document, read-only (§6).
             cancel={{
               onClick: async () => {
@@ -1696,9 +1683,8 @@ export default function ReceiptsPage() {
             next={{ onClick: handleNavNext, disabled: !canNavNext }}
             last={{ onClick: handleNavLast, disabled: navList.length === 0 }}
             // Post, Un Post, Print, PDF and Excel act on the SAVED voucher, read-only — exactly the JV's
-            // rule (per the user, 2026-11-13). After the last entry, Done on the empty entry row makes
-            // the voucher read-only (canFinishVoucher), then Post. Before, Post was live with the entry
-            // row open, so a half-typed entry was silently dropped by posting.
+            // rule (per the user, 2026-11-13). After the last entry, Done makes the voucher
+            // read-only (handleFinish, throwing away anything still in the entry row), then Post.
             print={{ onClick: () => window.print(), disabled: !isViewMode || !voucher }}
             find={{ onClick: () => setIsFindOpen(true) }}
             unpost={{
@@ -1868,18 +1854,9 @@ export default function ReceiptsPage() {
                   placement — and the boxes never shift under the user as the mode changes.
 
                   noValidate: without it, the browser's own "Please fill out this field" popup on
-                  the required Amount input blocks form submission BEFORE handleDone's own JS ever
-                  runs — silently defeating its entryRowUntouched escape hatch (Done on a blank row
-                  = "I'm finished", not "commit this row"). Every other entry-strip page (Journal
-                  Voucher, Purchase, Purchase Return, Stock Voucher) already has this; Receipts'
-                  Done button routes through this form's submit (DocumentToolbar's `done={{
-                  submit: true, form: 'receipt-entry-form' }}`), unlike Expenses' own Done (a plain
-                  onClick, never touches its form) — which is exactly why only THIS page hit it
-                  (reported by the user, 2026-09-21: clicking Done with one entry already saved got
-                  "Please fill out this field" instead of finishing the voucher). All real
-                  validation already happens in JS (buildPayload()'s own checks), so native
-                  validation was never doing anything the app doesn't already do better, with a
-                  proper in-app error message instead of a browser tooltip. */}
+                  the required Amount input blocks form submission before handleDone's own checks
+                  run (reported by the user, 2026-09-21). All real validation already happens in JS
+                  (buildPayload()'s own checks). Enter and Save submit this form; Done does not. */}
               <form
                 id="receipt-entry-form" onSubmit={handleDone}
                 noValidate

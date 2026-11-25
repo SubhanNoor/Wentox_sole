@@ -845,9 +845,23 @@ const nextSystemBillNo = useMemo(
   //   false ("Save")  -> stay editable so more articles can be added to the SAME return.
   // Mirrors PurchasePage's own doSave — see its comment for why the non-finalize path flips mode
   // to 'edit' rather than leaving it 'new' (otherwise the next Save creates a duplicate draft).
+  // Done never adds the line being typed — only Enter does (per the user, 2026-11-25). Done and
+  // Save+Post throw it away; a line that was being edited keeps its old values.
+  const discardEntryRow = () => {
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setSelectedUid(null);
+    setIsCustomUnit(false);
+  };
+
   const doSave = async (finalize: boolean) => {
     // Backstop for the awaitingNew lock.
     if (awaitingNew) { setErrorMsg('Click New to start a return first.'); return null; }
+    if (finalize && items.length === 0) {
+      discardEntryRow();
+      setErrorMsg('Not saved to Unposted — there are no entries. Add one with Enter first.');
+      return null;
+    }
     const payload = buildPayload();
     if (!payload) return null;
 
@@ -873,7 +887,7 @@ const nextSystemBillNo = useMemo(
     setSuccessMsg(wasNew ? 'Purchase return recorded successfully.' : 'Purchase return updated successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     // Done finishes (read-only, nothing unlocked); Save keeps whatever is open as it is.
-    if (finalize) { setMode('view'); setEditTarget(null); }
+    if (finalize) { setMode('view'); setEditTarget(null); discardEntryRow(); }
     refreshUnposted(); // P-03: a newly saved return joins the pending-posting list immediately.
     return result.data.draft_id;
   };
@@ -958,16 +972,20 @@ const nextSystemBillNo = useMemo(
       setErrorMsg('Failed to post purchase return: ' + res.error.message);
       return;
     }
-    // Post always clears for the next return, keeping the date (standard §8, 2026-10-06) — it
-    // used to leave the posted return on screen.
     const postedBillNo = billNo.trim();
-    const workingDate = date;
-    resetToNewReturn();
-    setDate(workingDate);
-    setSuccessMsg(`Purchase return ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
+    setSuccessMsg(`Purchase return ${postedBillNo || `#${res.data.system_no}`} posted.`);
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshReturns();
-    refreshUnposted(); // P-03: it just left the pending list.
+    // Others still unposted: open the latest of them, as Delete does (per the user, 2026-11-25).
+    // None left: a blank return, keeping the date (standard §8).
+    const remaining = await refreshUnposted();
+    if (remaining?.length) {
+      await handleNavFilterChange('unposted');
+    } else {
+      const workingDate = date;
+      resetToNewReturn();
+      setDate(workingDate);
+    }
   };
 
   // "Unpost" now moves the return back to being a draft — the real purchase_returns table strictly
@@ -1435,7 +1453,7 @@ const nextSystemBillNo = useMemo(
               title: editScope === 'detail' ? 'Edit the selected article' : 'Edit the header fields',
             }}
             save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this return' }}
-            done={{ submit: true, form: 'purchase-return-form', disabled: isViewMode || !isValid, title: 'Done — finish this return, then Post it' }}
+            done={{ submit: true, form: 'purchase-return-form', disabled: isViewMode || awaitingNew || (items.length > 0 && !isValid), title: 'Done — finish this return, then Post it' }}
             cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleNavFirst, disabled: !canBrowse }}
             prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}

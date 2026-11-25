@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties, type RefObject } from 'react';
 import { ChevronDown } from 'lucide-react';
-import SearchModal, { findDirectMatch, type SearchModalOption } from '@/components/SearchModal';
+import SearchModal, { unchangedPick, type SearchModalOption } from '@/components/SearchModal';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { formatDate, formatDateTime } from '@/lib/utils';
 import type { SaleDetailRow } from '@/lib/api';
@@ -168,8 +168,8 @@ export function SaleDetailSignoff() {
 
 /**
  * The typable picker used by both pages (the app's "type, then Enter opens a seeded SearchModal"
- * pattern): type a name and press Enter — an unambiguous name is picked straight away, otherwise
- * the modal opens seeded with what was typed; Arrow Up/Down open the full list; the chevron too.
+ * pattern): type a name and press Enter — the modal opens seeded with what was typed; Arrow Up/Down
+ * open the full list; the chevron too.
  */
 export function SaleDetailPicker({ label, options, value, onChange, placeholder, modalTitle, inputRef }: {
   label: string;
@@ -196,7 +196,7 @@ export function SaleDetailPicker({ label, options, value, onChange, placeholder,
       openBlank();
     } else if (e.key === 'Enter') {
       e.preventDefault(); e.stopPropagation();
-      const direct = findDirectMatch(options, text);
+      const direct = unchangedPick(value, options.find(o => o.value === value)?.label, text);
       if (direct) onChange(direct);
       else { setSeed(text); setOpen(true); }
     }

@@ -21,21 +21,16 @@ function haystackOf(opt: SearchModalOption): string {
 }
 
 /**
- * For a trigger field's Enter: the one option the typed text unambiguously means, or null (→ open
- * the modal as usual). Unambiguous = the text equals an option's label or one of its searchText
- * words (e.g. an article code) exactly, or it matches exactly one option at all. Lets a user type
- * a full code/name and press Enter ONCE instead of Enter-to-open then Enter-to-pick (per the user,
- * 2026-09-18).
+ * For a trigger field's Enter: the already-picked value when the field still shows exactly that
+ * pick (Enter then just moves on), otherwise null → open the modal. Typed text is NEVER matched to
+ * an option on the user's behalf, even when only one option fits: they choose it from the modal,
+ * which opens listing everything that contains what they typed (per the user, 2026-11-26).
+ *
+ * shownText: what the field displays for `value` right after it is picked.
  */
-export function findDirectMatch(options: SearchModalOption[], text: string): string | null {
-  const q = text.trim().toLowerCase();
-  if (!q) return null;
-  const exact = options.filter(opt =>
-    opt.label.trim().toLowerCase() === q
-    || (opt.searchText ?? '').toLowerCase().split(/\s+/).includes(q));
-  if (exact.length === 1) return exact[0].value;
-  const partial = options.filter(opt => haystackOf(opt).includes(q));
-  return partial.length === 1 ? partial[0].value : null;
+export function unchangedPick(value: string | number | null | undefined, shownText: string | null | undefined, text: string): string | null {
+  if (value == null || value === '' || !shownText) return null;
+  return text === shownText ? String(value) : null;
 }
 
 interface SearchModalProps {

@@ -64,7 +64,7 @@ function list(filters) {
 async function update(draftId, payload) {
   await getById(draftId);
 
-  return withTransaction(async (transaction) => {
+  await withTransaction(async (transaction) => {
     validateItems(payload.items);
     validateHeader(payload);
 
@@ -89,9 +89,11 @@ async function update(draftId, payload) {
     await repository.updateDraftHeader(transaction, draftId, draft);
     await repository.deleteDraftItems(transaction, draftId);
     await repository.insertDraftItems(transaction, draftId, lines);
-
-    return repository.findById(draftId);
   });
+
+  // Read back only after the commit: findById uses its own connection, which would wait on this
+  // transaction's locks until the request timed out.
+  return repository.findById(draftId);
 }
 
 // No stock to reverse (draft-create never touched vendor_stock_movements) — just delete the row,

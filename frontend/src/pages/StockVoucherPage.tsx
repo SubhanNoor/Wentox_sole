@@ -840,9 +840,22 @@ export default function StockVoucherPage() {
   // Save (keep editing) and Done (finish) share one path — `finalize` is the only difference,
   // matching Sale Bill/Purchase, where Save and Done have always been separate buttons
   // (toolbar standardisation, 2026-09-20). Returns the saved id, for Save+Post.
+  // Done never adds the line being typed — only Enter does (per the user, 2026-11-25). Done and
+  // Save+Post throw it away; a line that was being edited keeps its old values.
+  const discardEntryRow = () => {
+    setEntry(emptyEntry());
+    setEditingIndex(null);
+    setSelectedIndex(null);
+  };
+
   const doSave = async (finalize: boolean) => {
     // Backstop for the awaitingNew lock.
     if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return null; }
+    if (finalize && lines.length === 0) {
+      discardEntryRow();
+      setErrorMsg('Not saved to Unposted — there are no entries. Add one with Enter first.');
+      return null;
+    }
     const payload = buildPayload();
     if (!payload) return null;
     // Keyed on svId alone, not `mode === 'edit'`: Save (not Done) on a NEW voucher keeps mode
@@ -856,7 +869,7 @@ export default function StockVoucherPage() {
     setStatus(result.data.status);
     setErrorMsg('');
     flash('Stock Voucher saved — Post it to update stock.');
-    if (finalize) { setMode('view'); setEditTarget(null); }
+    if (finalize) { setMode('view'); setEditTarget(null); discardEntryRow(); }
     clearStockVoucherDraft();
     refresh();
     refreshUnposted();
@@ -897,12 +910,18 @@ export default function StockVoucherPage() {
     if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
     flash('Stock Voucher posted — stock updated.');
     refresh();
-    refreshUnposted();
     refreshUnpostedReservations(svId);
     refreshNav();
-    const workingDate = date;
-    resetToNewVoucher();
-    setDate(workingDate);
+    // Others still unposted: open the latest of them, as Delete does (per the user, 2026-11-25).
+    // None left: a blank voucher, keeping the date.
+    const remaining = await refreshUnposted();
+    if (remaining?.length) {
+      await handleBrowseFilterChange('unposted');
+    } else {
+      const workingDate = date;
+      resetToNewVoucher();
+      setDate(workingDate);
+    }
   };
 
   const handleUnpost = async () => {
@@ -1306,7 +1325,7 @@ export default function StockVoucherPage() {
               title: editScope === 'detail' ? 'Edit the selected line' : 'Edit the header fields',
             }}
             save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this voucher' }}
-            done={{ submit: true, form: 'sv-entry-form', disabled: isViewMode || !isValid, title: 'Done — finish this voucher, then Post it' }}
+            done={{ submit: true, form: 'sv-entry-form', disabled: isViewMode || awaitingNew || (lines.length > 0 && !isValid), title: 'Done — finish this voucher, then Post it' }}
             cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleFirst, disabled: !canBrowse }}
             prev={{ onClick: handlePrev, disabled: !canNavPrevious, title: 'Previous' }}

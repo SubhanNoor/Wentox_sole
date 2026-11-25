@@ -4,7 +4,7 @@ import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
 import DocumentToolbar from '@/components/DocumentToolbar';
 import RowActions from '@/components/RowActions';
-import SearchModal, { findDirectMatch } from '@/components/SearchModal';
+import SearchModal, { unchangedPick } from '@/components/SearchModal';
 import * as api from '@/lib/api';
 import type {
   VendorRow, BankAccountRow, BusinessAccountRow, ChequeRow, ChequeAllocationRow,
@@ -297,9 +297,6 @@ export default function ExpensesPage() {
   // empty entry row. The header edit needs its date; an entry needs its account and amount. The
   // finer per-mode checks still run when the entry is saved.
   const canSaveEntry = !isViewMode && !awaitingNew && (isHeaderEditing ? !!date : !!baId && amount > 0);
-  // Done on an EMPTY entry row with entries already saved = "finished with this voucher": it goes
-  // read-only, like the Journal Voucher's Done (per the user, 2026-11-11). Save has nothing to do then.
-  const canFinishVoucher = !isViewMode && mode !== 'edit' && !baId && amount <= 0 && (voucher?.lines?.length ?? 0) > 0;
   const voucherLines = voucher?.lines ?? [];
   // Opening a saved voucher shows its LAST lines (document_page_standard.md §5).
   const linesScrollRef = useScrollLinesToEnd(expenseId, voucherLines.length);
@@ -429,10 +426,9 @@ export default function ExpensesPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      // Text that already names exactly one account (e.g. the label of the account just picked)
-      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
-      // nothing because labels carry the parent account name (per the user, 2026-11-19).
-      const direct = findDirectMatch(accountOptions, accountSearchText);
+      // Still showing the picked account: move on, never reopening the list searching its full label
+      // (which matches nothing — labels carry the parent account name). Typed text opens the list.
+      const direct = unchangedPick(baId, accountOptions.find(o => o.value === baId)?.label, accountSearchText);
       if (direct) { handleAccountSelect(direct); return; }
       setAccountModalSeed(accountSearchText);
       setIsAccountModalOpen(true);
@@ -503,10 +499,11 @@ export default function ExpensesPage() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      // Text that already names exactly one account (e.g. the label of the account just picked)
-      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
-      // nothing because labels carry the parent account name (per the user, 2026-11-19).
-      const direct = findDirectMatch(paymentMode === 'CHEQUE_ENDORSED' ? endorsableCheques : bankOptions, sourceAccountSearchText);
+      // Still showing the picked account: move on, never reopening the list searching its full label
+      // (which matches nothing — labels carry the parent account name). Typed text opens the list.
+      const direct = paymentMode === 'CHEQUE_ENDORSED'
+        ? unchangedPick(chequeId, endorsableCheques.find(o => o.value === chequeId)?.label, sourceAccountSearchText)
+        : unchangedPick(bankId, bankOptions.find(o => o.value === bankId)?.label, sourceAccountSearchText);
       if (direct) { selectSourceAccount(direct); return; }
       setSourceAccountModalSeed(sourceAccountSearchText);
       setIsSourceAccountModalOpen(true);
@@ -718,37 +715,26 @@ export default function ExpensesPage() {
   };
 
   // PN-01: Enter on any entry field submits the form — commits the line and re-arms the strip for
-  // the NEXT entry on the SAME voucher. The toolbar's Done button (handleDoneButton) does the same
-  // commit-and-clear, just with its own "nothing to finish" guard when the strip is empty and no
-  // voucher is open yet — neither one starts a fresh voucher any more (see Done's own comment).
+  // the NEXT entry on the SAME voucher.
   const handleEntrySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!(await commitEntryLine())) return;
     clearEntryRow();
   };
 
-  // Toolbar's Done button — commits whatever's in the entry strip (if it's been filled in) as a
-  // line of the OPEN voucher, then clears the strip for another line. STAYS on the voucher just
-  // saved (Post is right there in the toolbar) rather than jumping to a blank new one — per the
-  // user, 2026-09-07: the earlier "opens a fresh blank one" behavior (2026-08-30) meant every
-  // voucher required a separate trip through Unposted to find and post it. Use New (or navigate
-  // away) to start an actually-blank voucher instead.
-  const handleDoneButton = async () => {
-    const hasEntryContent = !!baId || amount > 0;
-    if (hasEntryContent) {
-      if (!(await commitEntryLine())) return;
-    } else if (!voucher) {
-      setErrorMsg('Nothing to finish — fill in a payment first.');
-      return;
-    } else {
-      // Finished: read-only, like the Journal Voucher's Done; focus on New for the next voucher.
-      flash(`Voucher saved — ${voucherLines.length} ${voucherLines.length === 1 ? 'entry' : 'entries'}. Press Post to send it to the ledger.`);
-      setMode('view');
-      setEditTarget(null);
-      focusNewButton();
+  // The toolbar's Done: finish the voucher. It never adds the entry being typed — only Enter (or
+  // Save) does — so that is thrown away, and a line being edited keeps its old values (per the
+  // user, 2026-11-25). Stays on the voucher, read-only, with Post ready (per the user, 2026-09-07).
+  const handleFinish = () => {
+    clearEntryRow();
+    if (!voucher || voucherLines.length === 0) {
+      setErrorMsg('Not saved to Unposted — there are no entries. Add one with Enter first.');
       return;
     }
-    clearEntryRow();
+    flash(`Voucher saved — ${voucherLines.length} ${voucherLines.length === 1 ? 'entry' : 'entries'}. Press Post to send it to the ledger.`);
+    setMode('view');
+    setEditTarget(null);
+    focusNewButton();
   };
 
   // PN-01: post every line of the voucher in one action. Each line posts in its own transaction on
@@ -765,14 +751,19 @@ export default function ExpensesPage() {
     setVoucherResult({ action: 'post', data: res.data });
     setVoucher(res.data.voucher);
     setBalanceRefreshKey(k => k + 1);
-    refreshAllVouchers();
     // A CHEQUE_ENDORSED line allocates against a received cheque when it posts, so the endorsement
     // picker has to re-read or it keeps offering value that is already spent.
     refreshCheques();
 
     if (res.data.failed.length === 0) {
-      flash(`Voucher ${voucher.voucher_no} posted — ${res.data.posted?.length ?? 0} entr${(res.data.posted?.length ?? 0) === 1 ? 'y' : 'ies'}. Ready for the next voucher.`);
-      resetToNewVoucher();
+      flash(`Voucher ${voucher.voucher_no} posted — ${res.data.posted?.length ?? 0} entr${(res.data.posted?.length ?? 0) === 1 ? 'y' : 'ies'}.`);
+    }
+    // Fully posted and others still unposted: open the latest of them, as Delete does (per the
+    // user, 2026-11-25). None left: a blank voucher. A partial post stays on screen.
+    const fresh = await refreshAllVouchers();
+    if (res.data.failed.length === 0) {
+      if (fresh?.some(v => v.status !== 'POSTED')) await handleNavFilterChange('unposted');
+      else resetToNewVoucher();
     }
   };
 
@@ -1264,10 +1255,8 @@ export default function ExpensesPage() {
               onClick: async () => {
                 if (isHeaderEditing) {
                   if (await commitHeaderEdit()) clearEntryRow();
-                } else if (mode === 'edit') {
-                  if (await commitEntryLine()) clearEntryRow();
-                } else {
-                  await handleDoneButton();
+                } else if (await commitEntryLine()) {
+                  clearEntryRow();
                 }
               },
               disabled: !canSaveEntry,
@@ -1277,14 +1266,12 @@ export default function ExpensesPage() {
               onClick: async () => {
                 if (isHeaderEditing) {
                   if (await commitHeaderEdit()) clearEntryRow();
-                } else if (mode === 'edit') {
-                  if (await commitEntryLine()) clearEntryRow();
                 } else {
-                  await handleDoneButton();
+                  handleFinish();
                 }
               },
-              disabled: !canSaveEntry && !canFinishVoucher,
-              title: isHeaderEditing ? 'Update Voucher Header' : mode === 'edit' ? 'Update Entry' : 'Done — save this entry, ready to Post',
+              disabled: isHeaderEditing ? !canSaveEntry : isViewMode || awaitingNew,
+              title: isHeaderEditing ? 'Update Voucher Header' : 'Done — finish this voucher, then Post it',
             }}
             // Cancel drops the unsaved correction and reloads the saved voucher, read-only (§6).
             cancel={{ onClick: async () => { if (voucher) await openVoucherInEntry(voucher.voucher_id); else clearEntryRow(); }, disabled: mode !== 'edit', title: 'Cancel Edit' }}
@@ -1293,9 +1280,8 @@ export default function ExpensesPage() {
             next={{ onClick: handleNavNext, disabled: !canNavNext }}
             last={{ onClick: handleNavLast, disabled: navList.length === 0 }}
             // Post, Un Post, Print, PDF and Excel act on the SAVED voucher, read-only — exactly the JV's
-            // rule (per the user, 2026-11-13). After the last entry, Done on the empty entry row makes
-            // the voucher read-only (canFinishVoucher), then Post. Before, Post was live with the entry
-            // row open, so a half-typed entry was silently dropped by posting.
+            // rule (per the user, 2026-11-13). After the last entry, Done makes the voucher
+            // read-only (handleFinish, throwing away anything still in the entry row), then Post.
             print={{ onClick: () => window.print(), disabled: !isViewMode || !voucher }}
             find={{ onClick: () => setIsFindOpen(true) }}
             unpost={{ onClick: handleUnpostVoucher, disabled: !isViewMode || !voucher || voucherLines.length === 0 || voucher.status === 'UNPOSTED' || voucherBusy, title: 'Unpost Voucher' }}

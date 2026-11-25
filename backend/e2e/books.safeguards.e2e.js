@@ -85,7 +85,12 @@ test('A1: entering a cheque number the party already gave asks first, and saves 
   await page.getByPlaceholder('Cheque No.').fill(chequeNo);
   await page.locator('input[title="Date on Cheque"]').fill('2026-04-02');
   await page.getByPlaceholder('Amount').first().fill('4321');
-  await h.click(page, 'Done');
+  // Only Enter adds a line (not Done): walk the remaining fields, the last Enter adds it.
+  await page.getByPlaceholder('Amount').first().focus();
+  for (let i = 0; i < 6 && !(await page.getByText('Cheque already entered', { exact: true }).isVisible()); i++) {
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+  }
 
   const prompt = page.getByText('Cheque already entered', { exact: true });
   await prompt.waitFor({ timeout: 10000 });

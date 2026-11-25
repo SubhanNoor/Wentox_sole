@@ -704,9 +704,23 @@ const nextSystemBillNo = useMemo(
   // Note the mode flip to 'edit' on the non-finalize path: the create-vs-update choice above reads
   // `mode === 'edit' && purchaseId != null`, so leaving a just-created purchase in 'new' mode would
   // make the NEXT Save create a second, duplicate draft instead of updating this one.
+  // Done never adds the line being typed — only Enter does (per the user, 2026-11-25). Done and
+  // Save+Post throw it away; a line that was being edited keeps its old values.
+  const discardEntryRow = () => {
+    setCurrentRow(emptyCurrentRow());
+    setEditingUid(null);
+    setSelectedUid(null);
+    setIsCustomUnit(false);
+  };
+
   const doSave = async (finalize: boolean) => {
     // Backstop for the awaitingNew lock.
     if (awaitingNew) { setErrorMsg('Click New to start a purchase first.'); return null; }
+    if (finalize && items.length === 0) {
+      discardEntryRow();
+      setErrorMsg('Not saved to Unposted — there are no entries. Add one with Enter first.');
+      return null;
+    }
     const payload = buildPayload();
     if (!payload) return null;
 
@@ -735,7 +749,7 @@ const nextSystemBillNo = useMemo(
     setSuccessMsg(wasNew ? 'Purchase recorded successfully.' : 'Purchase updated successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     // Done finishes (read-only, nothing unlocked); Save keeps whatever is open as it is.
-    if (finalize) { setMode('view'); setEditTarget(null); }
+    if (finalize) { setMode('view'); setEditTarget(null); discardEntryRow(); }
     refreshUnposted(); // P-03: a newly saved purchase joins the pending-posting list immediately.
     return result.data.draft_id;
   };
@@ -823,14 +837,15 @@ const nextSystemBillNo = useMemo(
     setPurchaseId(res.data.purchase_id);
     setCurrentSystemNo(res.data.system_no);
     setCurrentIsPosted(true);
-    // Post always clears for the next purchase, keeping the date (standard §8; the user dropped
-    // P-02's "stay on screen if opened from the list" on 2026-10-06). The message names the
-    // document, since the form emptying is otherwise the only sign anything was posted.
-    setSuccessMsg(`Purchase ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
-    readyForNextPurchase();
+    // The message names the document, since the form changing is otherwise the only sign anything
+    // was posted.
+    setSuccessMsg(`Purchase ${postedBillNo || `#${res.data.system_no}`} posted.`);
     setTimeout(() => setSuccessMsg(''), 3000);
     refreshPurchases();
-    refreshUnposted(); // P-03: it just left the pending list.
+    // Others still unposted: open the latest of them, as Delete does (per the user, 2026-11-25).
+    const remaining = await refreshUnposted();
+    if (remaining?.length) await handleNavFilterChange('unposted');
+    else readyForNextPurchase(); // none left: a blank purchase, same date (standard §8)
   };
 
   // P-03: post the whole run via the real backend batch endpoint (draftPurchases.confirmAll).
@@ -1334,7 +1349,7 @@ const nextSystemBillNo = useMemo(
               title: editScope === 'detail' ? 'Edit the selected article' : 'Edit the header fields',
             }}
             save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this purchase' }}
-            done={{ submit: true, form: 'purchase-entry-form', disabled: isViewMode || !isValid, title: 'Done — finish this purchase, then Post it' }}
+            done={{ submit: true, form: 'purchase-entry-form', disabled: isViewMode || awaitingNew || (items.length > 0 && !isValid), title: 'Done — finish this purchase, then Post it' }}
             cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleNavFirst, disabled: !canBrowse }}
             prev={{ onClick: handleNavPrevious, disabled: !canNavPrevious, title: 'Previous' }}

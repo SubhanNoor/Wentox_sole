@@ -11,7 +11,7 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 import { formatDate, getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, nextSystemNoPreview, asNavEntries } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
-import SearchModal, { findDirectMatch } from '@/components/SearchModal';
+import SearchModal, { unchangedPick } from '@/components/SearchModal';
 import DocumentToolbar from '@/components/DocumentToolbar';
 import RowActions from '@/components/RowActions';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -276,8 +276,8 @@ export default function SaleReturnPage({ initialTab = 'return' }: { initialTab?:
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); openCustomerModal(); }
     else if (e.key === 'Enter') {
       e.preventDefault(); e.stopPropagation();
-      // One Enter is enough when the typed text already names exactly one customer.
-      const direct = findDirectMatch(customerOptions, customerSearchText);
+      // Still showing the picked customer: move on. Anything typed opens the list to choose from.
+      const direct = unchangedPick(customerId, customerOptions.find(o => o.value === customerId)?.label ?? selectedCustomer?.name, customerSearchText);
       if (direct) { selectCustomer(direct); return; }
       setCustomerModalSeed(customerSearchText); setIsCustomerModalOpen(true);
     }
@@ -819,9 +819,23 @@ const nextSystemReturnNo = useMemo(
   //   false ("Save")  -> stay editable so more articles can be added to the SAME return.
   // Mirrors SaleBillPage's own executeSave — see its comment for why the non-finalize path flips
   // mode to 'edit' rather than leaving it 'new' (otherwise the next Save creates a duplicate).
+  // Done never adds the line being typed — only Enter does (per the user, 2026-11-25). Done and
+  // Save+Post throw it away; a line that was being edited keeps its old values.
+  const discardEntryRow = () => {
+    setEntry(newUiItem());
+    setProductSearchText('');
+    setEditingIndex(null);
+    setSelectedIndex(null);
+  };
+
   const executeSave = async (finalize: boolean = true): Promise<SaleReturnRow | DraftSaleReturnRow | null> => {
     // Backstop for the awaitingNew lock — every save path funnels through here.
     if (awaitingNew) { setErrorMsg('Click New to start a return first.'); return null; }
+    if (finalize && items.length === 0) {
+      discardEntryRow();
+      setErrorMsg('Not saved to Unposted — there are no entries. Add one with Enter first.');
+      return null;
+    }
     const payload = buildPayload();
     if (!payload) return null;
 
@@ -849,7 +863,7 @@ const nextSystemReturnNo = useMemo(
     setSuccessMsg(wasNew ? 'New sale return saved successfully.' : 'Sale return updated successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     // Done finishes (read-only, nothing unlocked); Save keeps whatever is open as it is.
-    if (finalize) { setMode('view'); setEditTarget(null); }
+    if (finalize) { setMode('view'); setEditTarget(null); discardEntryRow(); }
     setErrorMsg('');
     if (wasNew) { createdInThisRun.current = true; clearSaleReturnDraft(); }
     refreshDrafts();
@@ -885,9 +899,11 @@ const nextSystemReturnNo = useMemo(
       setCurrentReturnIsPosted(true);
       refreshDrafts();
       refreshPostedReturns();
-      // Post always clears for the next return, keeping the date (standard §8, 2026-10-06).
-      setSuccessMsg(`Return ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
-      readyForNextReturn();
+      setSuccessMsg(`Return ${postedBillNo || `#${res.data.system_no}`} posted.`);
+      // Others still unposted: open the latest of them, as Delete does (per the user, 2026-11-25).
+      const remaining = await refreshDrafts();
+      if (remaining?.length) await handleBrowseFilterChange('unposted');
+      else readyForNextReturn(); // none left: a blank return, same date (standard §8)
       setTimeout(() => setSuccessMsg(''), 3000);
     }
   };
@@ -903,11 +919,14 @@ const nextSystemReturnNo = useMemo(
         setReturnId(postRes.data.return_id);
         setCurrentSystemNo(postRes.data.system_no);
         setCurrentReturnIsPosted(true);
-        setSuccessMsg(`Return ${postRes.data.bill_no} saved & posted. Ready for the next one.`);
+        setSuccessMsg(`Return ${postRes.data.bill_no} saved & posted.`);
         setTimeout(() => setSuccessMsg(''), 3000);
         refreshDrafts();
         refreshPostedReturns();
-        readyForNextReturn(); // Post always clears (standard §8, 2026-10-06)
+        // Others still unposted: open the latest of them, as Delete does (per the user, 2026-11-25).
+        const remaining = await refreshDrafts();
+        if (remaining?.length) await handleBrowseFilterChange('unposted');
+        else readyForNextReturn(); // none left: a blank return, same date (standard §8)
       }
     }
   };
@@ -1815,7 +1834,7 @@ const nextSystemReturnNo = useMemo(
               title: editScope === 'detail' ? 'Edit the selected article' : 'Edit the header fields',
             }}
             save={{ onClick: () => handleSave(false), disabled: mode === 'view' || !isNecessaryFieldsFilled, title: 'Save — keep editing this return' }}
-            done={{ onClick: () => handleSave(true), submit: true, disabled: mode === 'view' || !isNecessaryFieldsFilled, title: 'Done — finish this return, then Post it' }}
+            done={{ onClick: () => handleSave(true), submit: true, disabled: mode === 'view' || awaitingNew || (items.length > 0 && !isNecessaryFieldsFilled), title: 'Done — finish this return, then Post it' }}
             cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleFirst, disabled: !canBrowse }}
             prev={{ onClick: handlePrev, disabled: !canNavPrevious }}
@@ -2200,8 +2219,7 @@ const nextSystemReturnNo = useMemo(
                       if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                         e.preventDefault();
                         e.stopPropagation();
-                        // One Enter picks it when the typed code/name means exactly one article.
-                        const direct = e.key === 'Enter' ? findDirectMatch(productOptions, productSearchText) : null;
+                        const direct = e.key === 'Enter' ? unchangedPick(entry.articleId, products.find(p => p.article_id === entry.articleId)?.code, productSearchText) : null;
                         if (direct) {
                           handleEntryArticleChange(direct);
                           requestAnimationFrame(() => focusNextField(productTriggerRef.current));

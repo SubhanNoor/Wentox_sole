@@ -12,7 +12,7 @@ import { SaleBillPrintable, type SaleBillPrintModel } from '@/components/reports
 import { getTodayDate, toDateInputValue, formatCartons, cartonsProblem, pairsFor, cartonsAndPairs, nextSystemNoPreview, asNavEntries } from '@/lib/utils';
 import { focusFirstField, focusNextField } from '@/lib/fieldNav';
 import SearchableSelect from '@/components/SearchableSelect';
-import SearchModal, { findDirectMatch } from '@/components/SearchModal';
+import SearchModal, { unchangedPick } from '@/components/SearchModal';
 import DocumentToolbar from '@/components/DocumentToolbar';
 import RowActions from '@/components/RowActions';
 import PasswordPromptModal from '@/components/PasswordPromptModal';
@@ -468,8 +468,8 @@ const nextSystemBillNo = useMemo(
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); openCustomerModal(); }
     else if (e.key === 'Enter') {
       e.preventDefault(); e.stopPropagation();
-      // One Enter is enough when the typed text already names exactly one customer.
-      const direct = findDirectMatch(customerOptions, customerSearchText);
+      // Still showing the picked customer: move on. Anything typed opens the list to choose from.
+      const direct = unchangedPick(customerId, customerOptions.find(o => o.value === customerId)?.label ?? selectedCustomer?.name, customerSearchText);
       if (direct) { selectCustomer(direct); return; }
       setCustomerModalSeed(customerSearchText); setIsCustomerModalOpen(true);
     }
@@ -1138,9 +1138,23 @@ const nextSystemBillNo = useMemo(
   // Note the mode flip to 'edit' on the non-finalize path: executeSave() below picks create() vs
   // update() off `mode === 'edit' && billId != null`, so leaving a just-created bill in 'new' mode
   // would make the NEXT Save create a second, duplicate bill instead of updating this one.
+  // Done never adds the line being typed — only Enter does (per the user, 2026-11-25). Done and
+  // Save+Post throw it away; a line that was being edited keeps its old values.
+  const discardEntryRow = () => {
+    setEntry(newUiItem());
+    setProductSearchText('');
+    setEditingIndex(null);
+    setSelectedIndex(null);
+  };
+
   const executeSave = async (password?: string, finalize: boolean = true): Promise<SaleBillRow | DraftSaleBillRow | null> => {
     // Backstop for the awaitingNew lock — every save path funnels through here.
     if (awaitingNew) { setErrorMsg('Click New to start a bill first.'); return null; }
+    if (finalize && items.length === 0) {
+      discardEntryRow();
+      setErrorMsg('Not saved to Unposted — there are no entries. Add one with Enter first.');
+      return null;
+    }
     const payload = buildPayload();
     if (!payload) return null;
 
@@ -1156,7 +1170,7 @@ const nextSystemBillNo = useMemo(
       setSavedPairsByVariant(pairsByVariant(items));
       setSuccessMsg('Sale bill updated successfully.');
       setTimeout(() => setSuccessMsg(''), 3000);
-      if (finalize) { setMode('view'); setEditTarget(null); }
+      if (finalize) { setMode('view'); setEditTarget(null); discardEntryRow(); }
       setErrorMsg('');
       refreshStock();
       return result.data;
@@ -1189,7 +1203,7 @@ const nextSystemBillNo = useMemo(
     setSuccessMsg(wasNew ? 'New sale bill saved successfully.' : 'Sale bill updated successfully.');
     setTimeout(() => setSuccessMsg(''), 3000);
     // Done finishes (read-only, nothing unlocked); Save keeps whatever is open as it is.
-    if (finalize) { setMode('view'); setEditTarget(null); }
+    if (finalize) { setMode('view'); setEditTarget(null); discardEntryRow(); }
     setErrorMsg('');
     refreshStock();
     refreshUnposted(); // SB-06: a newly saved bill joins the pending-posting list immediately.
@@ -1250,13 +1264,14 @@ const nextSystemBillNo = useMemo(
         setCurrentBillIsPosted(true);
         // SB-05: name the bill in the message, because the form is about to empty — otherwise the
         // screen clearing is the only feedback that anything was saved at all.
-        setSuccessMsg(`Bill ${postRes.data.bill_no} saved & posted. Ready for the next one.`);
+        setSuccessMsg(`Bill ${postRes.data.bill_no} saved & posted.`);
         setTimeout(() => setSuccessMsg(''), 3000);
         refreshUnposted(); // SB-06: it just left the pending list.
         refreshPosted();
-        // Post always clears for the next bill, keeping the date (standard §8; the user dropped
-        // SB-05's "stay on screen if opened from the list" on 2026-10-06).
-        readyForNextBill();
+        // Others still unposted: open the latest of them, as Delete does (per the user, 2026-11-25).
+        const remaining = await refreshUnposted();
+        if (remaining?.length) await handleBrowseFilterChange('unposted');
+        else readyForNextBill(); // none left: a blank bill, same date (standard §8)
       }
     }
   };
@@ -1273,11 +1288,12 @@ const nextSystemBillNo = useMemo(
       setCurrentBillIsPosted(true);
       refreshUnposted(); // SB-06: it just left the pending list.
       refreshPosted();
-      // Post always clears for the next bill, keeping the date (standard §8; the user dropped
-      // SB-05's "stay on screen if opened from the list" on 2026-10-06). The message names the
-      // bill, since the form emptying is otherwise the only sign it was posted.
-      setSuccessMsg(`Bill ${postedBillNo || `#${res.data.system_no}`} posted. Ready for the next one.`);
-      readyForNextBill();
+      // The message names the bill, since the form changing is otherwise the only sign it was posted.
+      setSuccessMsg(`Bill ${postedBillNo || `#${res.data.system_no}`} posted.`);
+      // Others still unposted: open the latest of them, as Delete does (per the user, 2026-11-25).
+      const remaining = await refreshUnposted();
+      if (remaining?.length) await handleBrowseFilterChange('unposted');
+      else readyForNextBill(); // none left: a blank bill, same date (standard §8)
       setTimeout(() => setSuccessMsg(''), 3000);
     }
   };
@@ -1939,7 +1955,7 @@ const nextSystemBillNo = useMemo(
               title: editScope === 'detail' ? 'Edit the selected article' : 'Edit the header fields',
             }}
             save={{ onClick: () => handleSave(false), disabled: mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded, title: 'Save — keep editing this bill' }}
-            done={{ onClick: () => handleSave(true), submit: true, disabled: mode === 'view' || !isNecessaryFieldsFilled || hasStockExceeded, title: 'Done — finish this bill, then Post it' }}
+            done={{ onClick: () => handleSave(true), submit: true, disabled: mode === 'view' || awaitingNew || (items.length > 0 && (!isNecessaryFieldsFilled || hasStockExceeded)), title: 'Done — finish this bill, then Post it' }}
             cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleFirst, disabled: !canBrowse }}
             prev={{ onClick: handlePrev, disabled: !canNavPrevious }}
@@ -2404,7 +2420,7 @@ const nextSystemBillNo = useMemo(
                       if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                         e.preventDefault();
                         e.stopPropagation();
-                        const direct = e.key === 'Enter' ? findDirectMatch(productOptions, productSearchText) : null;
+                        const direct = e.key === 'Enter' ? unchangedPick(entry.articleId, products.find(p => p.article_id === entry.articleId)?.code, productSearchText) : null;
                         if (direct) {
                           handleEntryArticleChange(direct);
                           requestAnimationFrame(() => focusNextField(productTriggerRef.current));

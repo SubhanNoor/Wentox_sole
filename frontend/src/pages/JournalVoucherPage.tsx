@@ -4,7 +4,7 @@ import { exportRowsToExcel } from '@/lib/export';
 import AppLayout from '@/components/AppLayout';
 import DocumentToolbar from '@/components/DocumentToolbar';
 import RowActions from '@/components/RowActions';
-import SearchModal, { findDirectMatch } from '@/components/SearchModal';
+import SearchModal, { unchangedPick } from '@/components/SearchModal';
 import { focusNextField } from '@/lib/fieldNav';
 import * as api from '@/lib/api';
 import type {
@@ -384,10 +384,12 @@ export default function JournalVoucherPage() {
       e.preventDefault();
       e.stopPropagation();
       if (isViewMode || detailLocked) return;
-      // Text that already names exactly one account (e.g. the label of the account just picked)
-      // picks it and moves on — one Enter, never the picker re-searching a full label that matches
-      // nothing because labels carry the parent account name (per the user, 2026-11-19).
-      const direct = findDirectMatch(accountOptions, entry.baSearchText);
+      // Still showing the picked account: move on, never reopening the list searching its full label
+      // (which matches nothing — labels carry the parent account name). Typed text opens the list.
+      const picked = accounts.find(a => String(a.ba_id) === entry.baId);
+      const direct = unchangedPick(entry.baId, picked && `${picked.name} (${picked.code})`, entry.baSearchText)
+        // A line loaded for editing shows the name its voucher was saved with.
+        ?? unchangedPick(entry.baId, editingIndex != null ? lines[editingIndex]?.baSearchText : undefined, entry.baSearchText);
       if (direct) { handleEntryAccountSelect(direct); return; }
       setEntryAccountModalSeed(entry.baSearchText);
       setIsEntryAccountModalOpen(true);
@@ -619,9 +621,22 @@ export default function JournalVoucherPage() {
   // Save (keep editing) and Done (finish) share one path — `finalize` is the only difference,
   // matching Sale Bill/Purchase, where Save and Done have always been separate buttons
   // (toolbar standardisation, 2026-09-20). Returns the saved id, for Save+Post.
+  // Done never adds the line being typed — only Enter does (per the user, 2026-11-25). Done and
+  // Save+Post throw it away; a line that was being edited keeps its old values.
+  const discardEntryRow = () => {
+    setEntry(emptyEntry());
+    setEditingIndex(null);
+    setSelectedIndex(null);
+  };
+
   const doSave = async (finalize: boolean) => {
     // Backstop for the awaitingNew lock.
     if (awaitingNew) { setErrorMsg('Click New to start a voucher first.'); return null; }
+    if (finalize && lines.length === 0) {
+      discardEntryRow();
+      setErrorMsg('Not saved to Unposted — there are no entries. Add one with Enter first.');
+      return null;
+    }
     const payload = buildPayload();
     if (!payload) return null;
     // Keyed on jvId alone, not `mode === 'edit'`: Save (not Done) on a NEW voucher keeps
@@ -637,7 +652,7 @@ export default function JournalVoucherPage() {
     setErrorMsg('');
     flash('Journal Voucher saved — Post it to update every line\'s ledger.');
     // Done/Save-and-finish closes the document back to read-only, so the unlock goes with it.
-    if (finalize) { setMode('view'); setEditTarget(null); }
+    if (finalize) { setMode('view'); setEditTarget(null); discardEntryRow(); }
     clearJournalVoucherDraft();
     refresh();
     refreshUnposted();
@@ -683,12 +698,18 @@ export default function JournalVoucherPage() {
     if (!res.ok) { fail('Failed to post: ' + res.error.message); return; }
     flash('Journal Voucher posted — every line\'s ledger updated.');
     refresh();
-    refreshUnposted();
     refreshNav();
     setBalanceRefreshKey(k => k + 1);
-    const workingDate = date;
-    resetToNewVoucher();
-    setDate(workingDate);
+    // Others still unposted: open the latest of them, as Delete does (per the user, 2026-11-25).
+    // None left: a blank voucher, keeping the date.
+    const remaining = await refreshUnposted();
+    if (remaining?.length) {
+      await handleBrowseFilterChange('unposted');
+    } else {
+      const workingDate = date;
+      resetToNewVoucher();
+      setDate(workingDate);
+    }
     focusNewButton();
   };
 
@@ -1098,7 +1119,7 @@ const nextJvNoPreview = useMemo(
               title: editScope === 'detail' ? 'Edit the selected line' : 'Edit the header fields',
             }}
             save={{ onClick: async () => { await doSave(false); }, disabled: isViewMode || !isValid, title: 'Save — keep editing this voucher' }}
-            done={{ submit: true, form: 'jv-entry-form', disabled: isViewMode || !isValid, title: 'Done — finish this voucher, then Post it' }}
+            done={{ submit: true, form: 'jv-entry-form', disabled: isViewMode || awaitingNew || (lines.length > 0 && !isValid), title: 'Done — finish this voucher, then Post it' }}
             cancel={{ onClick: handleCancelEdit, disabled: mode !== 'edit', title: 'Cancel Edit' }}
             first={{ onClick: handleFirst, disabled: !canBrowse }}
             prev={{ onClick: handlePrev, disabled: !canNavPrevious, title: 'Previous' }}
