@@ -39,6 +39,8 @@ function isAppActive() {
 }
 
 function raiseChildren() {
+  // A dialog open in the main window (mainModalOpen) keeps the main window in front until it closes.
+  if (mainModalOpen) return;
   for (const w of childWindows) {
     if (w.isDestroyed()) continue;
     w.setAlwaysOnTop(true);
@@ -47,6 +49,28 @@ function raiseChildren() {
   }
   // An open MenuBar dropdown stays above the children it was just shown over.
   if (menuPopup && !menuPopup.isDestroyed() && menuPopup.isVisible()) menuPopup.moveTop();
+}
+
+// True while the main window shows a dialog of its own (the Quick Menu's rename / password boxes,
+// per the user 2026-11-26). Child windows float above the main window, so a dialog drawn in its page
+// would sit hidden behind any open screen; while this is set the children drop their always-on-top
+// and the main window is brought to the front, and they float back up when the dialog closes.
+let mainModalOpen = false;
+
+function setMainModal(win, open) {
+  if (win !== mainWindow || !mainWindow || mainWindow.isDestroyed()) return false;
+  mainModalOpen = !!open;
+  if (mainModalOpen) {
+    for (const w of childWindows) { if (!w.isDestroyed()) w.setAlwaysOnTop(false); }
+    childrenOnTop = false;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.moveTop();
+    mainWindow.focus();
+  } else if (isAppActive()) {
+    childrenOnTop = true;
+    raiseChildren();
+  }
+  return true;
 }
 
 let syncScheduled = false;
@@ -282,6 +306,9 @@ function openChildWindow(page, tab, { params = {}, opener = null } = {}) {
   const existing = childByKey.get(key);
   if (existing && !existing.isDestroyed()) {
     bringChildForward(existing);
+    // Reopened from a menu/shortcut: the page puts the cursor back in its search bar, as on a fresh
+    // open (per the user, 2026-11-26 — handled by AppLayout.tsx; pages without one ignore it).
+    existing.webContents.executeJavaScript("window.dispatchEvent(new Event('wentox:reopened'))").catch(() => {});
     return existing;
   }
   const win = createAppWindow(page, tab, { child: true, params, opener });
@@ -410,5 +437,5 @@ function closeChildAndFocusMain(win) {
 
 module.exports = {
   createAppWindow, openChildWindow, setQuickMenuBottom, closeChildAndFocusMain, listChildWindows, focusChildWindow,
-  placeMenuPopup, showMenuPopup, hideMenuPopup,
+  placeMenuPopup, showMenuPopup, hideMenuPopup, setMainModal,
 };

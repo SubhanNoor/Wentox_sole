@@ -58,7 +58,7 @@ test('Sale Analysis + Sale Report: the printed document on screen, region groups
 
   for (const [label, title] of [['SALES ANALYSIS REPORT', /SALE ANALYSIS REPORT/], ['SALE / BILL LIST REPORT', /SALE REPORT/]]) {
     const page = await openReport(app, win, '5.SALE REPORTS', label);
-    await page.getByRole('button', { name: 'Region Wise', exact: true }).click();
+    await page.getByRole('button', { name: 'Region', exact: true }).click();
     await page.locator('[data-live-report] .excel-print-table').waitFor();
     assert.match(await page.locator('[data-live-report] h2').innerText(), title);
 

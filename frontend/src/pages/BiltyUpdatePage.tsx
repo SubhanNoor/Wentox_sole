@@ -392,7 +392,7 @@ export default function BiltyUpdatePage() {
   }, [successMsg, errorMsg, loading, filteredInvoices.length]);
 
   return (
-    <AppLayout pageTitle="Search & Bilty Adda Updation">
+    <AppLayout pageTitle="Search">
 
       {/* Print Preview Modal */}
       <ReportPrintPreviewModal
@@ -436,7 +436,7 @@ export default function BiltyUpdatePage() {
             user, 2026-09-16: match the layout, don't lose capability already built. */}
         <div className="card-white p-3 bg-white border flex flex-col gap-2 mb-3">
           <h3 className="font-lora font-semibold text-base border-b pb-2 text-slate-800 flex items-center gap-2">
-            <Search size={16} className="text-blue-600" /> Search &amp; Bilty Adda Updation
+            <Search size={16} className="text-blue-600" /> Search
           </h3>
 
           {/* Search filters — same fields as before, now one row (wraps on narrow windows)

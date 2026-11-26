@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo, useEffect } from 'react';
+import { Fragment, useState, useMemo, useEffect, useRef } from 'react';
 import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
@@ -16,6 +16,8 @@ import { REPORT_COLORS, signedColor } from '@/components/reports/reportColors';
 import { getWindowParam } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
+import { ledgerRowMatches } from '@/lib/ledgerSearch';
 
 
 type Loaded = { key: string; groupRows: VendorReportRow[]; ledger: { opening_balance: number; rows: LedgerRow[] } | null; error: string | null };
@@ -28,6 +30,16 @@ export function VendorReportContent() {
   // Every visit starts fresh (all vendors, Skip Zero off, last 3 months -> today), per the user.
   const [vendorFilter, setVendorFilter] = useState(() => getWindowParam('vendor') || 'all');
   const [skipZero, setSkipZero] = useState(() => getWindowParam('skipZero') === '1');
+  // Search bar on the vendors summary (per the user, 2026-11-26: every report has one, focused on
+  // open and again on going back to the summary). The vendor dropdown still opens one vendor's ledger.
+  const [searchQuery, setSearchQuery] = useState(() => getWindowParam('search') || '');
+  // A vendor's ledger has its own search bar, matching any column of a ledger row (2026-11-26).
+  const [ledgerSearch, setLedgerSearch] = useState(() => getWindowParam('ledgerSearch') || '');
+  const searchRef = useRef<HTMLInputElement>(null);
+  const ledgerSearchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    requestAnimationFrame(() => (vendorFilter === 'all' ? searchRef : ledgerSearchRef).current?.focus());
+  }, [vendorFilter]);
   const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') ?? getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') ?? getTodayDate());
 
@@ -69,7 +81,7 @@ export function VendorReportContent() {
 
   const handleShowPrintPreview = () => {
     api.openWindow('reports', 'vendor', {
-      vendor: vendorFilter, fromDate, toDate, skipZero: skipZero ? '1' : '0', autoPreview: '1',
+      vendor: vendorFilter, fromDate, toDate, skipZero: skipZero ? '1' : '0', search: searchQuery, ledgerSearch, autoPreview: '1',
     });
   };
 
@@ -79,8 +91,13 @@ export function VendorReportContent() {
   };
 
   const filteredGroupRows = useMemo(
-    () => vendorGroupRows.filter(r => !(skipZero && isZeroBalance(r.balance))),
-    [vendorGroupRows, skipZero],
+    () => {
+      const q = searchQuery.trim().toLowerCase();
+      return vendorGroupRows
+        .filter(r => !(skipZero && isZeroBalance(r.balance)))
+        .filter(r => !q || r.vendor_name.toLowerCase().includes(q));
+    },
+    [vendorGroupRows, skipZero, searchQuery],
   );
 
   const grandTotals = useMemo(() => {
@@ -99,9 +116,10 @@ export function VendorReportContent() {
     if (!ledger) return [];
     return [
       { date: fromDate ? `Before ${formatDate(fromDate)}` : '---', type: 'Opening Balance', ref: '-', debit: 0, credit: 0, balance: ledger.opening_balance },
-      ...ledger.rows.map(r => ({ date: formatDate(r.date), type: r.type, ref: r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, debit: r.debit, credit: r.credit, balance: r.balance })),
+      // Search keeps each row's real running balance; the Opening Balance row always stays.
+      ...ledger.rows.filter(r => ledgerRowMatches(r, ledgerSearch)).map(r => ({ date: formatDate(r.date), type: r.type, ref: r.inv_no ?? r.bill_no ?? `#${r.entry_id}`, debit: r.debit, credit: r.credit, balance: r.balance })),
     ];
-  }, [ledger, fromDate]);
+  }, [ledger, fromDate, ledgerSearch]);
 
   const handleExportGroupedExcel = () => {
     const headers = ['Vendor / Supplier', 'Total Purchase', 'Purchase Return', 'Net Purchase', 'Payment Paid', 'Balance'];
@@ -246,6 +264,9 @@ export function VendorReportContent() {
       {/* Filter Bar - data-no-print */}
       <StickyFilter>
         <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+          {vendorFilter === 'all'
+            ? <ReportSearchBar ref={searchRef} value={searchQuery} onChange={setSearchQuery} placeholder="Search vendor..." />
+            : <ReportSearchBar ref={ledgerSearchRef} value={ledgerSearch} onChange={setLedgerSearch} placeholder="Search date, type, ref, narration, amount..." />}
         <div className="flex flex-wrap items-center gap-3">
           <div className="w-64">
             <SearchableSelect

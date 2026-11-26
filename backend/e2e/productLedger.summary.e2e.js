@@ -1,6 +1,6 @@
 // Product Ledger, as the client asked for it (2026-10-12, columns 2026-11-08): one line per
 // product+colour with Opening / In / Return / Total Stock / Out / Balance, a Detailed view with a
-// running balance, and Date Range / This Week period radios. A manual adjustment is stock entered
+// running balance, and the Date Range / This Week period control. A manual adjustment is stock entered
 // straight onto stock, so it lands in In (reports.service.js#movementBucket), a reduction as a negative.
 'use strict';
 
@@ -73,11 +73,13 @@ test('Product Ledger: summary line, detailed running balance and This Week', asy
   const movementBalances = balances.filter((c) => c.length === 7 && /^#\d+$/.test(c[2])).map((c) => c[6]);
   assert.deepEqual(movementBalances, ['740', '260']);
 
-  // This Week radio: Monday of the current week to today.
-  const thisWeek = page.getByRole('radio', { name: 'This Week' });
-  const dateRange = page.getByRole('radio', { name: 'Date Range' });
-  assert.equal(await dateRange.isChecked(), true, 'Date Range is selected by default');
-  await thisWeek.check();
+  // Period control (a segmented PERIOD control since 2026-11-26, radios before): This Week =
+  // Monday of the current week to today.
+  const thisWeek = page.getByRole('button', { name: 'This Week', exact: true });
+  const dateRange = page.getByRole('button', { name: 'Date Range', exact: true });
+  const isOn = async (btn) => (await btn.getAttribute('aria-pressed')) === 'true';
+  assert.equal(await isOn(dateRange), true, 'Date Range is selected by default');
+  await thisWeek.click();
   const now = new Date();
   const monday = new Date(now);
   monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
@@ -86,14 +88,14 @@ test('Product Ledger: summary line, detailed running balance and This Week', asy
 
   // Switching back to Date Range restores the dates that were there before (per the user,
   // 2026-10-13: the old button couldn't be switched off).
-  await dateRange.check();
+  await dateRange.click();
   assert.equal(await dates.nth(0).inputValue(), '2026-07-01');
   assert.equal(await dates.nth(1).inputValue(), '2026-07-31');
 
-  // Editing a date while on This Week switches the radio back to Date Range.
-  await thisWeek.check();
+  // Editing a date while on This Week switches the period back to Date Range.
+  await thisWeek.click();
   await dates.nth(0).fill('2026-07-02');
-  assert.equal(await dateRange.isChecked(), true, 'editing a date leaves This Week');
+  assert.equal(await h.eventually(() => isOn(dateRange), true), true, 'editing a date leaves This Week');
 });
 
 test.after(() => closePool());

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
@@ -17,6 +17,8 @@ import { REPORT_COLORS, signedColor } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
+import SegmentedControl from '@/components/reports/SegmentedControl';
 
 interface SaleReportRow {
   key: string;
@@ -52,6 +54,15 @@ const GROUP_LABELS: Record<GroupMode, string> = {
   city: 'City Wise',
   'region-city': 'Region + City Wise',
 };
+
+// Filter-card controls (2026-11-26): grouping and period as labelled segmented controls inside the
+// filter card, instead of a separate full-width tab row above it. Button labels drop "Wise".
+const GROUP_OPTIONS = (Object.keys(GROUP_LABELS) as GroupMode[]).map(m => ({ value: m, label: GROUP_LABELS[m].replace(/ Wise$/, '') }));
+const PERIOD_OPTIONS: { value: 'overall' | 'month' | 'range'; label: string }[] = [
+  { value: 'overall', label: 'Overall' },
+  { value: 'month', label: 'By Month' },
+  { value: 'range', label: 'Between Two Dates' },
+];
 
 const COLUMN_LABELS: Record<GroupMode, string> = {
   overall: 'Summary',
@@ -115,9 +126,18 @@ export function SaleReportContent() {
 
   const [allCustomerRows, setCustomerRows] = useState<SaleReportRow[]>([]);
   const [skipZero, setSkipZero] = useState(() => getWindowParam('skipZero') === '1');
+  // Search bar (per the user, 2026-11-26: every report has one, focused on open, ready to type).
+  const [searchQuery, setSearchQuery] = useState(() => getWindowParam('search') || '');
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
   const customerRows = useMemo(
-    () => (skipZero ? allCustomerRows.filter(r => !isZeroBalance(r.balance)) : allCustomerRows),
-    [allCustomerRows, skipZero],
+    () => (skipZero ? allCustomerRows.filter(r => !isZeroBalance(r.balance)) : allCustomerRows)
+      // Search: customer, city or region name — every grouping and total follows the rows kept.
+      .filter(row => {
+        const q = searchQuery.trim().toLowerCase();
+        return !q || [row.label, row.cityName, row.regionName].some(v => (v ?? '').toLowerCase().includes(q));
+      }),
+    [allCustomerRows, skipZero, searchQuery],
   );
   const [loading, setLoading] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
@@ -156,7 +176,7 @@ export function SaleReportContent() {
   const handleShowPrintPreview = () => {
     api.openWindow('reports', 'sale-report', {
       groupMode, viewMode, filterMonth: String(filterMonth), filterYear: String(filterYear),
-      fromDate, toDate, skipZero: skipZero ? '1' : '0', autoPreview: '1',
+      fromDate, toDate, skipZero: skipZero ? '1' : '0', search: searchQuery, autoPreview: '1',
     });
   };
 
@@ -331,43 +351,14 @@ export function SaleReportContent() {
   return (
       <div className="mx-auto" style={{ maxWidth: 1150 }}>
 
-        {/* Grouping Selector - data-no-print */}
-        <div className="flex gap-2 p-1 bg-slate-100 rounded-xl max-w-2xl mb-6 border border-slate-200" data-no-print>
-          {(Object.keys(GROUP_LABELS) as GroupMode[]).map(mode => (
-            <button
-              key={mode}
-              onClick={() => setGroupMode(mode)}
-              className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 cursor-pointer ${groupMode === mode ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              {GROUP_LABELS[mode]}
-            </button>
-          ))}
-        </div>
 
         {/* Filter Bar - data-no-print */}
         <StickyFilter>
           <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+            <ReportSearchBar ref={searchRef} value={searchQuery} onChange={setSearchQuery} placeholder="Search customer, city or region..." />
+            <div className="basis-full"><SegmentedControl label="Group by" options={GROUP_OPTIONS} value={groupMode} onChange={setGroupMode} /></div>
           <div className="flex flex-wrap items-center gap-4">
-            <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
-              <button
-                onClick={() => setViewMode('overall')}
-                className={`px-3 py-2 rounded-md transition-all ${viewMode === 'overall' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-              >
-                Overall
-              </button>
-              <button
-                onClick={() => setViewMode('month')}
-                className={`px-3 py-2 rounded-md transition-all ${viewMode === 'month' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-              >
-                By Month
-              </button>
-              <button
-                onClick={() => setViewMode('range')}
-                className={`px-3 py-2 rounded-md transition-all ${viewMode === 'range' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}
-              >
-                Between Two Dates
-              </button>
-            </div>
+            <SegmentedControl label="Period" options={PERIOD_OPTIONS} value={viewMode} onChange={setViewMode} />
 
             {viewMode === 'month' && (
               <div className="flex items-center gap-2">

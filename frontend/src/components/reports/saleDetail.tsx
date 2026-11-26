@@ -208,6 +208,7 @@ export function SaleDetailPicker({ label, options, value, onChange, placeholder,
       <div className="relative flex-1">
         <input
           ref={inputRef}
+          data-report-search
           type="text"
           data-field-nav="true"
           value={text}

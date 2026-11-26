@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, toDateInputValue, formatDateTime } from '@/lib/utils';
 import { exportRowsToExcel } from '@/lib/export';
-import { Eye, Search } from 'lucide-react';
+import { Eye } from 'lucide-react';
 import * as api from '@/lib/api';
 import type { ChequeRow, IssuedChequeRow, ChequeAllocationRow } from '@/lib/api';
 import wentoxLogo from '@/assets/wentox_logo.png';
@@ -13,6 +13,7 @@ import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
 
 // Every event a cheque's life can produce — a small fixed enum, so distinct colors per event
 // (same spirit as ChequesTab.tsx's own STATUS_STYLES) don't run into the "badge color from
@@ -177,10 +178,11 @@ export function ChequeLedgerContent() {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // G-03 (changes-14-09-26.md): mounts fresh on every ChequePage tab switch, so a mount-only
-  // effect covers both "page opens on this tab" and "user switches to this tab".
-  const fromDateRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { requestAnimationFrame(() => fromDateRef.current?.focus()); }, []);
+  // The cursor lands in the search bar (per the user, 2026-11-26: every report opens with its
+  // search bar focused — it was the From date, G-03). Mounts fresh on every ChequePage tab switch,
+  // so a mount-only effect covers both "page opens on this tab" and "user switches to this tab".
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
 
   // No date filter on the fetch itself — `cheques.list`'s date_from/date_to filter on the cheque's
   // own due date (cheque_date), not on when any particular event happened, so a post-dated cheque
@@ -359,6 +361,7 @@ export function ChequeLedgerContent() {
         style={{ borderColor: 'var(--border-color)' }}
         data-no-print
       >
+        <ReportSearchBar ref={searchRef} value={search} onChange={setSearch} placeholder="Cheque no. or party..." />
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
             <button onClick={() => setTypeFilter('all')} className={`px-3 py-2 rounded-md transition-all ${typeFilter === 'all' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-800'}`}>All</button>
@@ -367,21 +370,11 @@ export function ChequeLedgerContent() {
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-            <input ref={fromDateRef} type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
+            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
             <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
-          </div>
-          <div className="relative min-w-[220px]">
-            <input
-              type="text"
-              placeholder="Cheque no. or party..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="soleria-input w-full py-1.5 text-xs pr-9 font-semibold"
-            />
-            <Search className="absolute right-3 top-2 text-slate-400" size={14} />
           </div>
         </div>
 

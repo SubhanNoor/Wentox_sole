@@ -20,15 +20,23 @@ export interface RenderMessage {
   maxHeight: number;
 }
 
+/** Main window → popup: draw the Quick Menu's right-click menu for the shortcut titled `title`. */
+export interface ContextRenderMessage {
+  type: 'renderContext';
+  seq: number;
+  title: string;
+}
+
 /** Popup → main window. */
 export type PopupMessage =
+  | { type: 'contextPick'; action: 'rename' | 'drop' }
   | { type: 'ready' }
   | { type: 'hover'; inside: boolean }
   | { type: 'pick'; page: string; tab?: string }
   | { type: 'dragstart'; page: string; tab?: string; label: string }
   | { type: 'dragend' };
 
-export type MenuPopupMessage = RenderMessage | PopupMessage;
+export type MenuPopupMessage = RenderMessage | ContextRenderMessage | PopupMessage;
 
 const CHANNEL_NAME = 'wentox-menu-popup';
 

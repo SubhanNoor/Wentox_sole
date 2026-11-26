@@ -7,7 +7,7 @@ import { getWindowParam } from '@/lib/windowParams';
 type SubPage = 'summary' | 'customer' | 'article';
 
 const SUB_PAGES: { key: SubPage; label: string }[] = [
-  { key: 'summary', label: 'Sale Report' },
+  { key: 'summary', label: 'Summary' },
   { key: 'customer', label: 'Customer Search' },
   { key: 'article', label: 'Article Wise' },
 ];
@@ -24,12 +24,16 @@ export function SaleReportWithSubPages() {
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1150 }}>
-      <div className="flex gap-2 p-1 bg-slate-100 rounded-xl max-w-md mb-6 border border-slate-200" data-no-print>
+      {/* Secondary tabs styled exactly like the Reports Hub tabs above them (per the user,
+          2026-11-26: the big pill row looked uneven). The first is "Summary" — "Sale Report" is
+          already the hub tab it sits under. */}
+      <div className="flex flex-wrap gap-1.5 mb-4" data-no-print>
         {SUB_PAGES.map(page => (
           <button
             key={page.key}
             onClick={() => setSubPage(page.key)}
-            className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 cursor-pointer whitespace-nowrap ${subPage === page.key ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            aria-pressed={subPage === page.key}
+            className={`px-2 py-1 text-[11px] font-semibold rounded-md transition-all cursor-pointer whitespace-nowrap ${subPage === page.key ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
           >
             {page.label}
           </button>

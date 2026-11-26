@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen, Eye } from 'lucide-react';
+import { ArrowLeft, Users, User, Truck, HardHat, Landmark, BookOpen, Eye } from 'lucide-react';
 import DataListTable from '@/components/DataListTable';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
@@ -12,6 +12,7 @@ import { ReportPrintPreviewModal } from '@/components/reports/ReportPrintPreview
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
 
 type EntityType = 'customer' | 'vendor' | 'employee' | 'subcustomer' | 'account' | 'bank';
 
@@ -318,18 +319,8 @@ export default function OverallSearchPage() {
             {/* Filter & Search Bar */}
             <StickyFilter>
               <div className="p-4 rounded-xl border mb-6 bg-white shadow-2xs flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
+                <ReportSearchBar ref={searchRef} value={searchQuery} onChange={setSearchQuery} placeholder="Search by name, code, city, or phone..." />
               <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
-                <div className="relative min-w-[260px] max-w-md flex-1">
-                  <Search className="absolute left-3.5 top-2.5 text-slate-400" size={16} />
-                  <input
-                    ref={searchRef}
-                    type="text"
-                    placeholder="Search by name, code, city, or phone..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="soleria-input pl-10 py-2 w-full text-sm font-semibold"
-                  />
-                </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   {(['all', 'customer', 'vendor', 'employee', 'subcustomer', 'account', 'bank'] as const).map(tab => (

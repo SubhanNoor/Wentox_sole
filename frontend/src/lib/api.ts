@@ -2100,6 +2100,7 @@ declare global {
         placeMenuPopup: (payload: { x: number; y: number }) => Promise<ApiResult<{ seq: number | null }>>;
         showMenuPopup: (payload: { seq: number; width: number; height: number }) => Promise<ApiResult<{ shown: boolean }>>;
         hideMenuPopup: () => Promise<ApiResult<{ hidden: boolean }>>;
+        setMainModal: (payload: { open: boolean }) => Promise<ApiResult<{ accepted: boolean }>>;
       };
       systemReset: {
         run: (payload: { password: string }) => Promise<ApiResult<{ ok: true }>>;
@@ -2713,6 +2714,12 @@ export async function placeMenuPopup(x: number, y: number): Promise<ApiResult<{ 
 export async function showMenuPopup(seq: number, width: number, height: number): Promise<ApiResult<{ shown: boolean }>> {
   if (!window.api) return NO_BRIDGE;
   return window.api.windows.showMenuPopup({ seq, width, height });
+}
+
+// While the main window shows its own dialog, bring it in front of the floating child windows.
+export async function setMainWindowModal(open: boolean): Promise<void> {
+  if (!window.api) return;
+  await window.api.windows.setMainModal({ open });
 }
 
 export async function hideMenuPopup(): Promise<ApiResult<{ hidden: boolean }>> {

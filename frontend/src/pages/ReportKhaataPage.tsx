@@ -2,7 +2,8 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import SkipZeroToggle, { isZeroBalance } from '@/components/SkipZeroToggle';
 import { formatCurrency, balanceColor } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
-import { Search, Eye } from 'lucide-react';
+import { Eye } from 'lucide-react';
+import { ledgerRowMatches } from '@/lib/ledgerSearch';
 import SearchableSelect from '@/components/SearchableSelect';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime } from '@/lib/utils';
@@ -16,6 +17,7 @@ import { getWindowParam } from '@/lib/windowParams';
 import wentoxLogo from '@/assets/wentox_logo.png';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
 
 interface KhaataRow {
   date: string;
@@ -89,6 +91,8 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   // its ledger statement. Clicking a row of the list on screen opens that account's statement.
   const [accountBaId, setAccountBaId] = useState<number | null>(() => { const p = getWindowParam('accountBaId'); return p ? Number(p) : null; });
   const [accountSearch, setAccountSearch] = useState(() => getWindowParam('accountSearch') || '');
+  // The statement's own search bar (per the user, 2026-11-26): matches any column of a ledger row.
+  const [ledgerSearch, setLedgerSearch] = useState(() => getWindowParam('ledgerSearch') || '');
   const [skipZero, setSkipZero] = useState(() => getWindowParam('skipZero') === '1');
   const [fromDate, setFromDate] = useState(() => getWindowParam('fromDate') || getThreeMonthsAgoDate());
   const [toDate, setToDate] = useState(() => getWindowParam('toDate') || getTodayDate());
@@ -165,7 +169,9 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
     const rows: KhaataRow[] = [
       { date: fromDate ? `Before ${formatDate(fromDate)}` : '---', type: 'Opening Balance', invNo: '-', billNo: '-', narration: fromDate ? `Opening balance before ${formatDate(fromDate)}` : 'Opening Balance brought forward', chequeNo: undefined, chequeDate: undefined, pairs: 0, debit: 0, credit: 0, balance: ledger.opening_balance },
     ];
-    for (const r of ledger.rows) {
+    // Search keeps whole vouchers (a matching purchase keeps all its item rows) and each row's real
+    // running balance; the Opening Balance row always stays.
+    for (const r of ledger.rows.filter(row => ledgerRowMatches(row, ledgerSearch))) {
       const invNo = r.inv_no != null ? String(r.inv_no) : String(r.entry_id);
       if ((r.type === 'Purchase' || r.type === 'Purchase Return') && r.purchase_items && r.purchase_items.length > 1) {
         r.purchase_items.forEach((item, i) => {
@@ -193,7 +199,10 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
       });
     }
     return rows;
-  }, [ledger, fromDate]);
+  }, [ledger, fromDate, ledgerSearch]);
+  // The real closing balance, whatever the search is showing (the Grand Total row is the whole
+  // ledger's, like Cash Book's: narrowing the rows must not change what the account closes on).
+  const closingBalance = ledger ? (ledger.rows.length ? ledger.rows[ledger.rows.length - 1].balance : ledger.opening_balance) : 0;
 
   const handleExportExcel = () => {
     if (accountBaId == null) {
@@ -214,7 +223,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
 
   const handleShowPrintPreview = () => {
     const params: Record<string, string> = { fromDate, toDate, autoPreview: '1' };
-    if (accountBaId != null) params.accountBaId = String(accountBaId);
+    if (accountBaId != null) { params.accountBaId = String(accountBaId); params.ledgerSearch = ledgerSearch; }
     else { params.accountSearch = accountSearch; params.skipZero = skipZero ? '1' : '0'; }
     api.openWindow('reports', isAllScope ? 'business-ledger' : 'account-ledger', params);
   };
@@ -364,7 +373,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
             <td colSpan={6} style={{ ...TD, fontSize: '11px', fontWeight: 'bold' }}>GRAND TOTAL</td>
             <td style={{ ...TD, fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#047857' }}>{formatCurrency(ledger?.total_debit || 0)}</td>
             <td style={{ ...TD, fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', color: '#e11d48' }}>({formatCurrency(ledger?.total_credit || 0)})</td>
-            <td style={{ ...TD, fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(runningKhaata[runningKhaata.length - 1]?.balance || 0) }}>{formatCurrency(runningKhaata[runningKhaata.length - 1]?.balance || 0)}</td>
+            <td style={{ ...TD, fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: balanceColor(closingBalance) }}>{formatCurrency(closingBalance)}</td>
           </tr>
         </tbody>
       </table>
@@ -375,9 +384,11 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
   const showingStatement = accountBaId != null;
   // The cursor lands in the search box whenever the accounts list is showing — on open and on
   // "Back to list" (per the user, 2026-11-23), same as Overall Trail's list view.
+  // On a statement it is the statement's own search bar (2026-11-26).
   const searchRef = useRef<HTMLInputElement>(null);
+  const ledgerSearchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (!showingStatement) requestAnimationFrame(() => searchRef.current?.focus());
+    requestAnimationFrame(() => (showingStatement ? ledgerSearchRef : searchRef).current?.focus());
   }, [showingStatement]);
 
   return (
@@ -386,6 +397,9 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
         {/* Filter Bar - data-no-print */}
         <StickyFilter>
           <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+            {showingStatement
+              ? <ReportSearchBar ref={ledgerSearchRef} value={ledgerSearch} onChange={setLedgerSearch} placeholder="Search date, type, inv #, narration, amount..." />
+              : <ReportSearchBar ref={searchRef} value={accountSearch} onChange={setAccountSearch} placeholder={`Search code, name, main account${isAllScope ? ', category' : ''} or city...`} />}
           <div className="flex flex-wrap items-center gap-3">
             {showingStatement && (
               <button
@@ -398,7 +412,7 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
             )}
             {/* Account picker on the statement only (per the user, 2026-11-22): the list view lost
                 its "All accounts / All customers (list)" dropdown — the list IS all accounts — and
-                its space went to the search box below. */}
+                its space went to the search box (now on its own row, 2026-11-26). */}
             {showingStatement && (
             <div className="w-72">
               <SearchableSelect
@@ -409,19 +423,6 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
                 searchPlaceholder="Type a name..."
               />
             </div>
-            )}
-            {!showingStatement && (
-              <div className="relative w-[520px] max-w-full">
-                <input
-                  ref={searchRef}
-                  type="text"
-                  placeholder={`Search code, name, main account${isAllScope ? ', category' : ''} or city...`}
-                  value={accountSearch}
-                  onChange={e => setAccountSearch(e.target.value)}
-                  className="soleria-input w-full py-1.5 text-xs pr-9 font-semibold"
-                />
-                <Search className="absolute right-3 top-2 text-slate-400" size={14} />
-              </div>
             )}
             {showingStatement && (
               <div className="flex items-center gap-2">

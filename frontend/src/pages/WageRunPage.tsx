@@ -8,7 +8,7 @@ import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import AppLayout from '@/components/AppLayout';
 import SearchModal from '@/components/SearchModal';
 import { Plus, Trash2, Save, HardHat, AlertTriangle, Edit2, Undo2, History, Clock, ChevronDown, X } from 'lucide-react';
-import { usePersistentField, useClearPageDraft } from '@/hooks/usePersistentField';
+import { usePersistentField, useClearPageDraft, useNewDocGate } from '@/hooks/usePersistentField';
 import CartonsInput from '@/components/CartonsInput';
 import { useDataVersion } from '@/hooks/useDataVersion';
 
@@ -64,8 +64,14 @@ export default function WageRunPage() {
   // gets AppLayout's generic G-01 fallback, which every sibling page — Purchase/SaleBill/Journal
   // Voucher — deliberately backs up with its own ref instead of relying on).
   const dateFieldRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { requestAnimationFrame(() => dateFieldRef.current?.focus()); }, []);
   const [employeeId, setEmployeeId] = usePersistentField('wage-run', 'employeeId', '');
+  // New button (per the user, 2026-11-26) — same gate as every other data-entry page: the entry
+  // form stays locked until New is pressed, and after a Save/Post it locks again with the cursor
+  // waiting on New. Genuine unsaved typing (a worker already picked) survives a page switch and
+  // skips the lock. Loading a saved run for edit from History also unlocks it (editingRunId).
+  const { hasClickedNew, setHasClickedNew, markNewClicked } = useNewDocGate('wage-run', ['employeeId']);
+  const newButtonRef = useRef<HTMLButtonElement>(null);
+  const focusNewButton = () => requestAnimationFrame(() => requestAnimationFrame(() => newButtonRef.current?.focus()));
   const [stage, setStage] = usePersistentField('wage-run', 'stage', '');
   const [items, setItems] = usePersistentField<FormItem[]>('wage-run', 'items', [emptyItem()]);
 
@@ -262,6 +268,7 @@ export default function WageRunPage() {
 
   const resetForm = () => {
     setEditingRunId(null);
+    setHasClickedNew(false);
     setDate(today());
     setEmployeeId('');
     setStage('');
@@ -270,6 +277,7 @@ export default function WageRunPage() {
   };
 
   const save = async (shouldPost: boolean) => {
+    if (awaitingNew) return fail('Click New to start a wage run first.');
     if (!employeeId) return fail('Pick a worker first.');
     if (!stage) return fail('Pick which stage this settlement is for.');
     if (filledItems.length === 0) return fail('Add at least one article line with a quantity.');
@@ -295,6 +303,26 @@ export default function WageRunPage() {
     }
     resetForm();
     loadAll();
+  };
+
+  const awaitingNew = editingRunId == null && !hasClickedNew;
+  // Opening the screen (or returning to the entry tab) always puts the cursor on New (per the user,
+  // 2026-11-26); so does the form locking again after a Save/Post. New itself moves it on to
+  // Settlement Date (handleNew).
+  useEffect(() => {
+    if (tab === 'entry') focusNewButton();
+  }, [tab]);
+  useEffect(() => {
+    if (awaitingNew) focusNewButton();
+  }, [awaitingNew]);
+
+  const handleNew = () => {
+    resetForm();
+    markNewClicked();
+    setTab('entry');
+    // Cursor straight to the first field (Settlement Date) on every New — two frames, so the
+    // fieldset has re-rendered unlocked before focusing.
+    requestAnimationFrame(() => requestAnimationFrame(() => dateFieldRef.current?.focus()));
   };
 
   /* ── history actions ──────────────────────────────────────── */
@@ -452,11 +480,23 @@ export default function WageRunPage() {
             {/* Toolbar — Save/Post live in one dedicated bar above the cards, same shape as the
                 Receipts/Expenses/Sale Bill toolbars, instead of at the bottom of a long form. */}
             <div className="flex flex-wrap items-center justify-between gap-3 mb-6 p-4 rounded-xl border" style={{ background: '#ffffff', borderColor: 'var(--border-color)' }}>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* New — same toolbar-btn look (icon over label, emerald +) as every other
+                    data-entry page's New button (per the user, 2026-11-26). */}
+                <button
+                  ref={newButtonRef}
+                  type="button"
+                  onClick={handleNew}
+                  title="New"
+                  className="toolbar-btn"
+                >
+                  <Plus size={16} strokeWidth={2.5} className="text-emerald-600" />
+                  <span>New</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => save(true)}
-                  disabled={!employeeId}
+                  disabled={awaitingNew || !employeeId}
                   className="btn-gold flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <Save size={16} /> {editingRunId ? 'Save & Post' : 'Post Wage Run'}
@@ -464,7 +504,7 @@ export default function WageRunPage() {
                 <button
                   type="button"
                   onClick={() => save(false)}
-                  disabled={!employeeId}
+                  disabled={awaitingNew || !employeeId}
                   className="px-4 py-2 text-sm font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Save as Unposted
@@ -494,6 +534,14 @@ export default function WageRunPage() {
               className={`card-white p-6 bg-white border flex flex-col transition-all duration-200 ${tabAnimating ? 'opacity-0 translate-y-2' : 'animate-in fade-in slide-in-from-bottom-3 duration-300'}`}
               style={{ height: entryCardHeight ?? undefined }}
             >
+            {/* Locked until New — a disabled fieldset greys out every field/button inside it.
+                display:contents keeps the form's own flex-column layout untouched. */}
+            <fieldset disabled={awaitingNew} className={`contents ${awaitingNew ? '[&_*]:cursor-not-allowed' : ''}`}>
+            {awaitingNew && (
+              <div className="shrink-0 mb-3 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-500">
+                Press <strong>New</strong> to start a wage run.
+              </div>
+            )}
 
             {/* Header fields */}
             <div className="shrink-0 grid grid-cols-1 md:grid-cols-3 gap-4 pb-4 mb-4 border-b" style={{ borderColor: 'var(--border-color)' }}>
@@ -748,6 +796,7 @@ export default function WageRunPage() {
                 )}
               </div>
             )}
+            </fieldset>
             </form>
           </>
         ) : (

@@ -15,6 +15,8 @@ import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import { ledgerRowMatches } from '@/lib/ledgerSearch';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
 
 type AccountGroupType = 'all' | 'customer' | 'vendor' | 'employee' | 'bank' | 'chart_account' | 'business_account';
 
@@ -71,9 +73,11 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
 
   // G-03 (changes-14-09-26.md): the cursor lands in the search box whenever the grouped-list view
   // is showing — on first open, and again on returning to it from a drill-down.
+  // In a drill-down it is the ledger's own search bar instead (per the user, 2026-11-26).
   const searchRef = useRef<HTMLInputElement>(null);
+  const ledgerSearchRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (!selectedAccount) requestAnimationFrame(() => searchRef.current?.focus());
+    requestAnimationFrame(() => (selectedAccount ? ledgerSearchRef : searchRef).current?.focus());
   }, [selectedAccount]);
   const [isClosing, setIsClosing] = useState(false);
 
@@ -87,6 +91,8 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
 
   const [ledgerFromDate, setLedgerFromDate] = useState(() => getWindowParam('ledgerFromDate') || getThreeMonthsAgoDate());
   const [ledgerToDate, setLedgerToDate] = useState(() => getWindowParam('ledgerToDate') || getTodayDate());
+  // The ledger's search bar (per the user, 2026-11-26): matches any column of a ledger row.
+  const [ledgerSearch, setLedgerSearch] = useState(() => getWindowParam('ledgerSearch') || '');
 
   const [trailBalances, setTrailBalances] = useState<OverallTrailRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -190,7 +196,9 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
   const expandedLedgerRows = useMemo<DisplayLedgerRow[]>(() => {
     if (!ledger) return [];
     const out: DisplayLedgerRow[] = [];
-    for (const row of ledger.rows) {
+    // Search keeps whole vouchers and each row's real running balance; Closing Balance is the
+    // account's own, whatever is shown.
+    for (const row of ledger.rows.filter(r => ledgerRowMatches(r, ledgerSearch))) {
       const ref = row.inv_no != null ? String(row.inv_no) : (row.bill_no ?? `#${row.entry_id}`);
       if ((row.type === 'Purchase' || row.type === 'Purchase Return') && row.purchase_items && row.purchase_items.length > 1) {
         row.purchase_items.forEach((item, i) => {
@@ -214,7 +222,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
       });
     }
     return out;
-  }, [ledger]);
+  }, [ledger, ledgerSearch]);
 
   // "Show Print Preview" opens a new window on this same tab (per the user, 2026-09-03), instead
   // of an in-page overlay — behaves like the app's other "open in new window" child windows.
@@ -224,7 +232,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
 
   const handleShowLedgerPrintPreview = () => {
     if (!selectedAccount) return;
-    const params: Record<string, string> = { ledgerFromDate, ledgerToDate, autoPreview: '1' };
+    const params: Record<string, string> = { ledgerFromDate, ledgerToDate, ledgerSearch, autoPreview: '1' };
     if (selectedAccount.ba_id != null) params.selectedAccountBaId = String(selectedAccount.ba_id);
     if (selectedAccount.ac_id != null) params.selectedAccountAcId = String(selectedAccount.ac_id);
     api.openWindow('reports', ownTab, params);
@@ -485,25 +493,12 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
           {/* Top Filter Container with Searchable Select & Action Buttons */}
           <StickyFilter>
             <div className="card-white p-5 bg-white border border-slate-200/80 rounded-2xl mb-5 shadow-2xs" data-no-print>
+              <ReportSearchBar ref={searchRef} value={searchQuery} onChange={setSearchQuery} placeholder="Search code or description..." />
 
             {/* ROW 1: Search Input, SearchableSelect Dropdown, As On Date, & Actions */}
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3 flex-1 min-w-0">
 
-                {/* Search Text Input — also has the space the "Jump to Account..." dropdown used to
-                    take (removed per the user, 2026-11-22; clicking an account in the list opens
-                    its ledger, and the ledger view keeps its own Switch Account picker). */}
-                <div className="relative min-w-[260px] flex-1 max-w-[640px]">
-                  <Search className="absolute left-3 top-2.5 text-slate-400" size={15} />
-                  <input
-                    ref={searchRef}
-                    type="text"
-                    placeholder="Search code or description..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="soleria-input pl-9 py-2 w-full text-xs font-semibold"
-                  />
-                </div>
 
                 {/* As On Date Selector */}
                 <div className="flex items-center gap-2">
@@ -632,6 +627,7 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
           {/* Date Filter Bar */}
           <StickyFilter>
             <div className="p-3 rounded-lg border mb-6 bg-white shadow-sm flex flex-wrap items-center justify-between gap-4" style={{ borderColor: 'var(--border-color)' }}>
+              <ReportSearchBar ref={ledgerSearchRef} value={ledgerSearch} onChange={setLedgerSearch} placeholder="Search date, type, ref, narration, amount..." />
             <div className="flex flex-wrap items-center gap-4">
               <div className="flex items-center gap-2">
                 <label className="text-xs font-semibold text-slate-500 uppercase">From Date:</label>

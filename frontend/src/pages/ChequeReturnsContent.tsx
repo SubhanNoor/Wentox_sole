@@ -2,13 +2,14 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { todayISO } from '@/lib/cheques';
 import { formatDate } from '@/lib/utils';
-import { AlertTriangle, RotateCcw, Search } from 'lucide-react';
+import { AlertTriangle, RotateCcw } from 'lucide-react';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import * as api from '@/lib/api';
 import { useInFlight } from '@/hooks/useInFlight';
 import type { ChequeAllocationRow, ChequeDispositionType, IssuedChequeRow } from '@/lib/api';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
 
 const DISPOSITION_LABELS: Record<Exclude<ChequeDispositionType, 'DEPOSIT'>, string> = {
   VENDOR_PAYMENT: 'Paid to Vendor',
@@ -185,23 +186,13 @@ export function ChequeReturnsContent() {
         style={{ borderColor: 'var(--border-color)' }}
         data-no-print
       >
+        <ReportSearchBar ref={searchRef} value={search} onChange={setSearch} placeholder="Cheque no. or payee..." />
         <div>
           <h3 className="font-lora font-semibold text-lg text-slate-800">Endorsed & Issued Cheques</h3>
           <p className="text-xs text-slate-500 font-medium">
             Every cheque payment still standing — whether endorsed onward from a customer receipt
             or issued directly from our own bank — hand one back to reverse just that payment.
           </p>
-        </div>
-        <div className="relative min-w-[240px]">
-          <input
-            ref={searchRef}
-            type="text"
-            placeholder="Cheque no. or payee..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-          />
-          <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
         </div>
       </div>
       </StickyFilter>

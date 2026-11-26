@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Search, X, Eye } from 'lucide-react';
+import { X, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { getTodayDate, getThreeMonthsAgoDate, formatDate, formatDateTime, formatCartons } from '@/lib/utils';
 import * as api from '@/lib/api';
@@ -17,6 +17,8 @@ import { getWindowParam, shouldAutoPreview, isChildWindow } from '@/lib/windowPa
 import { qty, toCartons, roundCartons, cartonQty, type QtyUnit } from '@/lib/cartonQty';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
+import SegmentedControl from '@/components/reports/SegmentedControl';
 
 // Date range calculation helpers
 const getWeekRange = (dateStr: string) => {
@@ -640,22 +642,11 @@ export default function ReportStockPage() {
           {/* Search and Filters */}
           <StickyFilter>
             <div className="p-3 rounded-lg border mb-4 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
+              <ReportSearchBar ref={searchRef} value={searchQuery} onChange={setSearchQuery} placeholder={activeStockTab === 'current' ? 'Search article, category or color...' : 'Search by article code or name...'} />
             <div className="flex flex-wrap items-center justify-between gap-2.5">
-              {/* Left Side: Search */}
-              <div className="relative w-56 md:w-64 shrink-0">
-                <Search className="absolute left-3 top-2 text-slate-400" size={16} />
-                <input
-                  ref={searchRef}
-                  type="text"
-                  placeholder={activeStockTab === 'current' ? 'Search article, category or color...' : 'Search by article code or name...'}
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="soleria-input pl-9 py-1.5 w-full text-xs font-semibold"
-                />
-              </div>
-
-              {/* Right Side: As On (stock tabs), Category Filter, Show Print Preview */}
-              <div className="flex flex-wrap items-center gap-2.5 ml-auto">
+              {/* Under the search bar (2026-11-26): As On / Unit and the category filter from the left,
+                  Show Print Preview pushed to the right edge — like every other report's card. */}
+              <div className="flex flex-wrap items-center gap-2.5 flex-1">
                 {(activeStockTab === 'current' || activeStockTab === 'material') && (
                   <div className="flex items-center gap-2 shrink-0">
                     <label className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">As on:</label>
@@ -668,19 +659,12 @@ export default function ReportStockPage() {
                   </div>
                 )}
                 {activeStockTab !== 'current' && activeStockTab !== 'material' && (
-                  <div className="flex items-center gap-1 rounded-xl border p-0.5 shrink-0" style={{ borderColor: 'var(--border-color)' }} role="group" aria-label="Unit">
-                    {(['pairs', 'cartons'] as const).map(u => (
-                      <button
-                        key={u}
-                        type="button"
-                        onClick={() => setProdUnit(u)}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer ${prodUnit === u ? 'bg-[var(--brand-navy)] text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-                        aria-pressed={prodUnit === u}
-                      >
-                        {u === 'pairs' ? 'Pairs' : 'Cartons'}
-                      </button>
-                    ))}
-                  </div>
+                  <SegmentedControl
+                    label="Unit"
+                    options={[{ value: 'pairs', label: 'Pairs' }, { value: 'cartons', label: 'Cartons' }]}
+                    value={prodUnit}
+                    onChange={setProdUnit}
+                  />
                 )}
                 <div className="w-44 shrink-0">
                   <SearchableSelect
@@ -698,7 +682,7 @@ export default function ReportStockPage() {
 
                 <button
                   onClick={handleShowPrintPreview}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs shrink-0"
+                  className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs shrink-0"
                 >
                   <Eye size={14} /> Show Print Preview
                 </button>
@@ -710,7 +694,7 @@ export default function ReportStockPage() {
               <div className="flex flex-wrap items-center gap-4 mt-3 pt-3 border-t border-slate-200/80">
                 {activeStockTab === 'material' && (
                   <div className="flex items-center gap-2">
-                    <label className="text-xs font-semibold text-slate-500 uppercase">Vendor:</label>
+                    <label className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Vendor:</label>
                     <div className="w-48">
                       <SearchableSelect
                         options={[
@@ -727,7 +711,7 @@ export default function ReportStockPage() {
                 )}
                 {activeStockTab === 'daily' && (
                   <div className="flex items-center gap-2">
-                    <label className="text-xs font-semibold text-slate-500 uppercase">Production Date:</label>
+                    <label className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Production Date:</label>
                     <input
                       type="date"
                       value={dailyDate}
@@ -740,7 +724,7 @@ export default function ReportStockPage() {
                 {activeStockTab === 'weekly' && (
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-slate-500 uppercase">Select Week Date:</label>
+                      <label className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Select Week Date:</label>
                       <input
                         type="date"
                         value={weeklyDate}
@@ -760,7 +744,7 @@ export default function ReportStockPage() {
                 {activeStockTab === 'monthly' && (
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-slate-500 uppercase">Month:</label>
+                      <label className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Month:</label>
                       <div className="w-40">
                         <SearchableSelect
                           options={Array.from({ length: 12 }, (_, i) => ({
@@ -775,7 +759,7 @@ export default function ReportStockPage() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-slate-500 uppercase">Year:</label>
+                      <label className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Year:</label>
                       <input
                         type="number"
                         value={monthlyYear}
@@ -789,7 +773,7 @@ export default function ReportStockPage() {
                 {activeStockTab === 'overall' && (
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-slate-500 uppercase">From Date:</label>
+                      <label className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">From Date:</label>
                       <input
                         type="date"
                         value={fromDate}
@@ -798,7 +782,7 @@ export default function ReportStockPage() {
                       />
                     </div>
                     <div className="flex items-center gap-2">
-                      <label className="text-xs font-semibold text-slate-500 uppercase">To Date:</label>
+                      <label className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">To Date:</label>
                       <input
                         type="date"
                         value={toDate}

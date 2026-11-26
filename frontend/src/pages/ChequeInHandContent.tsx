@@ -1,11 +1,12 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { formatDate } from '@/lib/utils';
-import { Search, Wallet } from 'lucide-react';
+import { Wallet } from 'lucide-react';
 import * as api from '@/lib/api';
 import type { ChequeRow } from '@/lib/api';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
 
 interface InHandRow extends ChequeRow {
   unallocated: number;
@@ -86,6 +87,7 @@ export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () =>
         style={{ borderColor: 'var(--border-color)' }}
         data-no-print
       >
+        <ReportSearchBar ref={searchRef} value={search} onChange={setSearch} placeholder="Cheque no. or customer..." />
         <div>
           <h3 className="font-lora font-semibold text-lg text-slate-800 flex items-center gap-2">
             <Wallet size={18} className="text-[#B08D57]" /> Cheques in Hand
@@ -94,17 +96,6 @@ export function ChequeInHandContent({ onGoToDisposal }: { onGoToDisposal?: () =>
             Every received cheque still uncashed — not yet deposited, endorsed, bounced, or
             returned. Read-only; use the Disposal tab to act on one.
           </p>
-        </div>
-        <div className="relative min-w-[240px]">
-          <input
-            ref={searchRef}
-            type="text"
-            placeholder="Cheque no. or customer..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="soleria-input w-full py-1.5 text-xs pr-10 font-semibold bg-white"
-          />
-          <Search className="absolute right-3 top-2.5 text-slate-400" size={14} />
         </div>
       </div>
       </StickyFilter>

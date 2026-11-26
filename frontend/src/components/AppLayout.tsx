@@ -4,6 +4,10 @@ import {
   Settings, LogOut, ChevronDown, Home,
   Pin, BookmarkPlus, ArrowDownToLine
 } from 'lucide-react';
+import PasswordPromptModal from '@/components/PasswordPromptModal';
+import QuickMenuRenameModal from '@/components/QuickMenuRenameModal';
+import QuickMenuContextMenu from '@/components/QuickMenuContextMenu';
+import { canUseMenuPopup, openMenuPopupChannel, type ContextRenderMessage, type MenuPopupMessage } from '@/lib/menuPopup';
 import type { NavPage } from '@/types';
 import NotificationBell from '@/components/NotificationBell';
 import BooksCheckNotice from '@/components/BooksCheckNotice';
@@ -36,7 +40,6 @@ interface QuickShortcut {
 // used often enough day-to-day to be worth one click from anywhere. Cash Book and Business Ledger
 // live as sub-tabs of the Reports Hub page, so they're pinned via `tab`, same as clicking their
 // own "+ Pin Page to Bar" would produce.
-const BILTY_ADDA_SHORTCUT: QuickShortcut = { id: 'default_setup-adda', label: 'BILTY ADDA', page: 'setup-adda' };
 
 const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   { id: 'default_sale-bill', label: 'Sale Bill', page: 'sale-bill' },
@@ -51,7 +54,8 @@ const DEFAULT_SHORTCUTS: QuickShortcut[] = [
   // "Search" (Bilty Adda Updation) was a default here until the user had it taken off the bar,
   // 2026-11-18 — see removeRetiredShortcuts() below.
   { id: 'default_backup', label: 'Backup', page: 'settings', tab: 'backup' },
-  BILTY_ADDA_SHORTCUT,
+  // BILTY ADDA (Adda setup) was a default 2026-11-25 only; taken off again the same day — see
+  // removeBiltyAddaShortcut() below.
 ];
 
 // Where the bar is stored, and which generation of DEFAULT_SHORTCUTS has been published to this
@@ -65,14 +69,15 @@ const SHORTCUTS_STORAGE_KEY = 'wento_quick_shortcuts_clean_v3';
 const SHORTCUTS_SEED_KEY = 'wento_quick_shortcuts_seed';
 const SHORTCUTS_SEED_VERSION = '2026-08-26c';
 
-// One-off removal (per the user, 2026-11-18): take "Search" (Bilty Adda Updation) and "Home" off
-// every machine's bar — including a self-pinned "Home", which is why this matches on label as well
-// as page. Runs once per machine (keyed by RETIRED_SHORTCUTS_KEY) rather than on every load, so a
-// client who pins either one back later keeps it. Every other shortcut, default or self-pinned, is
-// left exactly as it was — unlike bumping SHORTCUTS_SEED_VERSION, which would reset the whole bar.
+// One-off removal (per the user, 2026-11-18): take "Home" off every machine's bar — including a
+// self-pinned "Home", which is why this matches on label as well as page. Runs once per machine
+// (keyed by RETIRED_SHORTCUTS_KEY) rather than on every load, so a client who pins it back later
+// keeps it. Every other shortcut is left exactly as it was — unlike bumping SHORTCUTS_SEED_VERSION,
+// which would reset the whole bar. It also took "Search" (the Bilty Adda Updation page) off until
+// 2026-11-25; the client wants that page on the bar now (see renameBiltyUpdateShortcut), so a
+// machine that hasn't run this yet keeps it.
 const RETIRED_SHORTCUTS_KEY = 'wento_quick_shortcuts_retired_2026-11-18';
-const isRetiredShortcut = (s: QuickShortcut) =>
-  s.page === 'bilty-update' || s.page === 'home' || s.label === 'Search' || s.label === 'Home';
+const isRetiredShortcut = (s: QuickShortcut) => s.page === 'home' || s.label === 'Home';
 
 function removeRetiredShortcuts(list: QuickShortcut[]): QuickShortcut[] {
   if (localStorage.getItem(RETIRED_SHORTCUTS_KEY)) return list;
@@ -82,18 +87,43 @@ function removeRetiredShortcuts(list: QuickShortcut[]): QuickShortcut[] {
   return updated;
 }
 
-// One-off correction (per the user, 2026-11-25): BILTY ADDA was taken off the client's bar by
-// mistake when Search Customer was the one meant to go. Puts BILTY ADDA back and removes Search
-// Customer. A machine that still has BILTY ADDA keeps it where it is, with no second copy. Runs
-// once per machine, so either one can be pinned or unpinned freely afterwards.
+// One-off correction (per the user, 2026-11-25): removes Search Customer from the bar. It also put
+// BILTY ADDA back (released in 1.11.5) until the user asked, the same day, for BILTY ADDA to go
+// too — see removeBiltyAddaShortcut(). Runs once per machine.
 const ADDA_SWAP_KEY = 'wento_quick_shortcuts_adda_swap_2026-11-25';
 
 function swapSearchCustomerForBiltyAdda(list: QuickShortcut[]): QuickShortcut[] {
   if (localStorage.getItem(ADDA_SWAP_KEY)) return list;
   const updated = list.filter(s => s.page !== 'search-customer');
-  if (!updated.some(s => s.page === BILTY_ADDA_SHORTCUT.page)) updated.push(BILTY_ADDA_SHORTCUT);
   localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
   localStorage.setItem(ADDA_SWAP_KEY, '1');
+  return updated;
+}
+
+// One-off rename (per the user, 2026-11-25): the Search & Bilty Adda Updation page is now just
+// "Search" (menu item and page title). A shortcut the client already pinned to it still carries the
+// old long label — pins copy the title at the time — so it is renamed once per machine. Matched by
+// page, so nothing else on the bar is touched.
+const BILTY_UPDATE_RENAME_KEY = 'wento_quick_shortcuts_bilty_update_rename_2026-11-25';
+
+function renameBiltyUpdateShortcut(list: QuickShortcut[]): QuickShortcut[] {
+  if (localStorage.getItem(BILTY_UPDATE_RENAME_KEY)) return list;
+  const updated = list.map(s => (s.page === 'bilty-update' && s.label !== 'Search' ? { ...s, label: 'Search' } : s));
+  localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
+  localStorage.setItem(BILTY_UPDATE_RENAME_KEY, '1');
+  return updated;
+}
+
+// One-off removal (per the user, 2026-11-25): take BILTY ADDA (the Adda setup page) off every
+// machine's bar — including one 1.11.5 put back, or one the client pinned themselves, which is why
+// it matches the label as well as the page. Runs once per machine, so it can be pinned again later.
+const BILTY_ADDA_REMOVAL_KEY = 'wento_quick_shortcuts_bilty_adda_removed_2026-11-25';
+
+function removeBiltyAddaShortcut(list: QuickShortcut[]): QuickShortcut[] {
+  if (localStorage.getItem(BILTY_ADDA_REMOVAL_KEY)) return list;
+  const updated = list.filter(s => s.page !== 'setup-adda' && s.label.trim().toUpperCase() !== 'BILTY ADDA');
+  localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
+  localStorage.setItem(BILTY_ADDA_REMOVAL_KEY, '1');
   return updated;
 }
 
@@ -101,19 +131,21 @@ function loadShortcuts(): QuickShortcut[] {
   if (localStorage.getItem(SHORTCUTS_SEED_KEY) !== SHORTCUTS_SEED_VERSION) {
     localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(DEFAULT_SHORTCUTS));
     localStorage.setItem(SHORTCUTS_SEED_KEY, SHORTCUTS_SEED_VERSION);
-    // A fresh seed already reflects both one-off changes — mark them done too.
+    // A fresh seed already reflects every one-off change — mark them done too.
     localStorage.setItem(RETIRED_SHORTCUTS_KEY, '1');
     localStorage.setItem(ADDA_SWAP_KEY, '1');
+    localStorage.setItem(BILTY_UPDATE_RENAME_KEY, '1');
+    localStorage.setItem(BILTY_ADDA_REMOVAL_KEY, '1');
     return DEFAULT_SHORTCUTS;
   }
   // Already seeded, so from here on the user's own bar wins — including an empty one they cleared
   // themselves, which is why this returns [] rather than re-seeding.
   const saved = localStorage.getItem(SHORTCUTS_STORAGE_KEY);
-  if (!saved) return swapSearchCustomerForBiltyAdda([]);
+  if (!saved) return [];
   try {
     const parsed = JSON.parse(saved);
     if (!Array.isArray(parsed)) return DEFAULT_SHORTCUTS;
-    return swapSearchCustomerForBiltyAdda(removeRetiredShortcuts(parsed));
+    return removeBiltyAddaShortcut(renameBiltyUpdateShortcut(swapSearchCustomerForBiltyAdda(removeRetiredShortcuts(parsed))));
   } catch {
     return DEFAULT_SHORTCUTS;
   }
@@ -140,6 +172,68 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
   // Drag & Drop Quick Menu State
   const [isDragging, setIsDragging] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Right-click on a Quick Menu button (per the user, 2026-11-26): 1. Change Name (only the
+  // shortcut's label — the page keeps its own title), 2. Drop Page (asks the logged-in user's own
+  // password first — admin's for admin, user's for user — via PasswordPromptModal/verifyPassword).
+  const [shortcutMenu, setShortcutMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [renamingShortcutId, setRenamingShortcutId] = useState<string | null>(null);
+  const [droppingShortcutId, setDroppingShortcutId] = useState<string | null>(null);
+  // Inside Electron the menu is drawn in the MenuBar dropdown's own always-on-top window (see
+  // lib/menuPopup.ts) so it shows above every open screen; a plain browser draws it in-page.
+  const [useContextPopup] = useState(canUseMenuPopup);
+  const shortcutMenuRef = useRef(shortcutMenu);
+  useEffect(() => { shortcutMenuRef.current = shortcutMenu; });
+  const pickShortcutAction = (id: string, action: 'rename' | 'drop') => {
+    setShortcutMenu(null);
+    if (action === 'rename') setRenamingShortcutId(id);
+    else setDroppingShortcutId(id);
+  };
+  const contextChannelRef = useRef<BroadcastChannel | null>(null);
+  useEffect(() => {
+    if (!useContextPopup || IS_CHILD_WINDOW) return;
+    const channel = openMenuPopupChannel();
+    contextChannelRef.current = channel;
+    if (!channel) return;
+    channel.onmessage = (e: MessageEvent<MenuPopupMessage>) => {
+      if (e.data?.type !== 'contextPick') return;
+      const open = shortcutMenuRef.current;
+      if (!open) return;
+      void api.hideMenuPopup();
+      setShortcutMenu(null);
+      if (e.data.action === 'rename') setRenamingShortcutId(open.id);
+      else setDroppingShortcutId(open.id);
+    };
+    return () => { channel.close(); contextChannelRef.current = null; };
+  }, [useContextPopup]);
+  // Open → place the popup window at the pointer and tell it what to draw; close → hide it.
+  useEffect(() => {
+    if (!useContextPopup || !shortcutMenu) return;
+    let stale = false;
+    const title = shortcuts.find(s => s.id === shortcutMenu.id)?.label ?? '';
+    void api.placeMenuPopup(shortcutMenu.x, shortcutMenu.y).then(res => {
+      if (stale || !res.ok || res.data.seq === null) return;
+      const msg: ContextRenderMessage = { type: 'renderContext', seq: res.data.seq, title };
+      contextChannelRef.current?.postMessage(msg);
+    });
+    return () => { stale = true; void api.hideMenuPopup(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only (re)open on a new right-click
+  }, [useContextPopup, shortcutMenu]);
+  useEffect(() => {
+    if (!shortcutMenu) return;
+    const close = () => setShortcutMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('blur', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('blur', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [shortcutMenu]);
 
   const popupRef = useRef<HTMLDivElement>(null);
 
@@ -400,6 +494,20 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     return shortcuts.some(s => s.page === currentPage && (!subTabId || s.tab === subTabId));
   }, [shortcuts, currentPage, subTabId]);
 
+  // A report window reopened from the menu or Quick Menu while already open is only brought forward
+  // (backend windowManager.js#openChildWindow) — the page does not mount again, so its own
+  // focus-on-open never re-runs. This puts the cursor back in the report's search bar (marked
+  // data-report-search) every time (per the user, 2026-11-26).
+  useEffect(() => {
+    const onReopened = () => requestAnimationFrame(() => {
+      const search = Array.from(document.querySelectorAll<HTMLInputElement>('input[data-report-search]'))
+        .find(el => el.offsetParent !== null && !el.disabled);
+      search?.focus();
+    });
+    window.addEventListener('wentox:reopened', onReopened);
+    return () => window.removeEventListener('wentox:reopened', onReopened);
+  }, []);
+
   const handlePinCurrentPage = () => {
     if (isCurrentPagePinned) return;
     const newShortcut: QuickShortcut = {
@@ -411,6 +519,28 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
     const updated = [...shortcuts, newShortcut];
     setShortcuts(updated);
     localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
+  };
+
+  const saveShortcuts = (updated: QuickShortcut[]) => {
+    setShortcuts(updated);
+    localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(updated));
+  };
+  // While the rename/password box is open, the main window comes in front of the open screens.
+  const quickMenuDialogOpen = renamingShortcutId != null || droppingShortcutId != null;
+  useEffect(() => {
+    if (!quickMenuDialogOpen) return;
+    void api.setMainWindowModal(true);
+    return () => { void api.setMainWindowModal(false); };
+  }, [quickMenuDialogOpen]);
+  const renamingShortcut = shortcuts.find(s => s.id === renamingShortcutId) ?? null;
+  const droppingShortcut = shortcuts.find(s => s.id === droppingShortcutId) ?? null;
+  const renameShortcut = (id: string, label: string) => {
+    saveShortcuts(shortcuts.map(s => (s.id === id ? { ...s, label } : s)));
+    setRenamingShortcutId(null);
+  };
+  const removeShortcut = (id: string) => {
+    saveShortcuts(shortcuts.filter(s => s.id !== id));
+    setDroppingShortcutId(null);
   };
 
   const handleDropShortcut = (e: React.DragEvent) => {
@@ -651,6 +781,11 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
                       <button
                         type="button"
                         onClick={() => api.openWindow(s.page, s.tab)}
+                        onContextMenu={e => {
+                          e.preventDefault();
+                          setShortcutMenu({ id: s.id, x: e.clientX, y: e.clientY });
+                        }}
+                        title="Right-click to rename or drop"
                         className="cursor-pointer font-semibold hover:underline"
                       >
                         {s.label}
@@ -678,6 +813,33 @@ export default function AppLayout({ children, pageTitle, subTabTitle, subTabId, 
             {isCurrentPagePinned ? 'Pinned to Bar' : '+ Pin Page to Bar'}
           </button>
         </div>
+
+        {shortcutMenu && !useContextPopup && (
+          <div
+            className="fixed z-50 shadow-xl"
+            style={{ left: Math.min(shortcutMenu.x, window.innerWidth - 230), top: shortcutMenu.y + 4 }}
+            onMouseDown={e => e.stopPropagation()}
+            onContextMenu={e => e.preventDefault()}
+          >
+            <QuickMenuContextMenu
+              title={shortcuts.find(x => x.id === shortcutMenu.id)?.label ?? ''}
+              onPick={action => pickShortcutAction(shortcutMenu.id, action)}
+            />
+          </div>
+        )}
+        <QuickMenuRenameModal
+          isOpen={renamingShortcut != null}
+          currentName={renamingShortcut?.label ?? ''}
+          onClose={() => setRenamingShortcutId(null)}
+          onRename={name => renamingShortcut && renameShortcut(renamingShortcut.id, name)}
+        />
+        <PasswordPromptModal
+          isOpen={droppingShortcut != null}
+          onClose={() => setDroppingShortcutId(null)}
+          onSuccess={() => droppingShortcut && removeShortcut(droppingShortcut.id)}
+          title="Drop Page from Quick Menu"
+          subtitle={`Remove "${droppingShortcut?.label ?? ''}" from the Quick Menu? Enter your password to confirm. The page itself is not affected.`}
+        />
         </>
         )}
 

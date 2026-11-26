@@ -13,6 +13,8 @@ import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
 import { qty, toCartons, roundCartons, cartonQty, type QtyUnit } from '@/lib/cartonQty';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
+import SegmentedControl from '@/components/reports/SegmentedControl';
 
 const MOVEMENT_TYPE_LABEL: Record<StockMovementType, string> = {
   PRODUCTION: 'Production',
@@ -359,31 +361,14 @@ export default function ProductLedgerContent() {
     );
   };
 
-  const toggleBtn = <T extends string>(current: T, set: (v: T) => void, value: T, label: string) => (
-    <button
-      type="button"
-      onClick={() => set(value)}
-      className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer ${current === value ? 'bg-[var(--brand-navy)] text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-      aria-pressed={current === value}
-    >
-      {label}
-    </button>
-  );
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1100 }}>
       {/* Filter Bar - data-no-print */}
       <StickyFilter>
         <div className="flex flex-col gap-4 p-4 rounded-xl border mb-6 bg-white shadow-sm" style={{ borderColor: 'var(--border-color)' }} data-no-print>
+          <ReportSearchBar ref={searchRef} value={searchQuery} onChange={setSearchQuery} placeholder="Search by article code or name..." />
         <div className="flex flex-wrap items-center gap-3">
-          <input
-            ref={searchRef}
-            type="text"
-            placeholder="Search by article code or name..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="soleria-input py-2 text-sm flex-1 min-w-[200px]"
-          />
           <div className="w-48">
             <SearchableSelect
               options={[
@@ -409,46 +394,38 @@ export default function ProductLedgerContent() {
             />
           </div>
         </div>
+        {/* Period, View and Unit as the same labelled segmented controls every report uses (per the
+            user, 2026-11-26) — they were radio buttons and navy pills before. */}
+        <div className="flex flex-wrap items-center gap-3">
+          <SegmentedControl
+            label="Period"
+            options={[{ value: 'range', label: 'Date Range' }, { value: 'week', label: 'This Week' }]}
+            value={periodMode}
+            onChange={choosePeriod}
+          />
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
+            <input type="date" value={fromDate} onChange={e => editDate(setFromDate, e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
+            <input type="date" value={toDate} onChange={e => editDate(setToDate, e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
+          </div>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-              <input type="date"
-            value={fromDate} onChange={e => editDate(setFromDate, e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-semibold text-slate-500 uppercase">To:</label>
-              <input type="date"
-            value={toDate} onChange={e => editDate(setToDate, e.target.value)} className="soleria-input py-1.5 px-3 text-sm" />
-            </div>
-            <div className="flex items-center gap-4 select-none" role="radiogroup" aria-label="Period">
-              {([['range', 'Date Range'], ['week', 'This Week']] as const).map(([mode, label]) => (
-                <label
-                  key={mode}
-                  title={mode === 'week' ? 'Monday of this week to today' : 'Use the From and To dates'}
-                  className={`flex items-center gap-1.5 text-xs font-semibold cursor-pointer whitespace-nowrap transition-colors ${
-                    periodMode === mode ? 'text-slate-800' : 'text-slate-400 hover:text-slate-600'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="product-ledger-period"
-                    checked={periodMode === mode}
-                    onChange={() => choosePeriod(mode)}
-                    className="cursor-pointer"
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-            <div className="flex items-center gap-1 rounded-xl border p-0.5" style={{ borderColor: 'var(--border-color)' }} role="group" aria-label="View">
-              {toggleBtn(viewMode, setViewMode, 'summary', 'Summary')}
-              {toggleBtn(viewMode, setViewMode, 'detailed', 'Detailed')}
-            </div>
-            <div className="flex items-center gap-1 rounded-xl border p-0.5" style={{ borderColor: 'var(--border-color)' }} role="group" aria-label="Unit">
-              {toggleBtn(unit, setUnit, 'pairs', 'Pairs')}
-              {toggleBtn(unit, setUnit, 'cartons', 'Cartons')}
-            </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <SegmentedControl
+              label="View"
+              options={[{ value: 'summary', label: 'Summary' }, { value: 'detailed', label: 'Detailed' }]}
+              value={viewMode}
+              onChange={setViewMode}
+            />
+            <SegmentedControl
+              label="Unit"
+              options={[{ value: 'pairs', label: 'Pairs' }, { value: 'cartons', label: 'Cartons' }]}
+              value={unit}
+              onChange={setUnit}
+            />
             <SkipZeroToggle value={skipZero} onChange={setSkipZero} />
           </div>
           <button

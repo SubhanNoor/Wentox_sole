@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import { Eye } from 'lucide-react';
@@ -14,6 +14,7 @@ import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
 
 export function PaymentTrailContent() {
   // Re-runs the loads below when another window saves something (live update, 2026-10-15).
@@ -25,9 +26,11 @@ export function PaymentTrailContent() {
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  // G-03 (changes-14-09-26.md): the cursor lands in the first field (From date) on open.
-  const fromDateRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { requestAnimationFrame(() => fromDateRef.current?.focus()); }, []);
+  // Search bar (per the user, 2026-11-26: every report has one, focused on open — it was the From
+  // date, G-03). Filters the account rows by title; the Grand Total is of the rows shown.
+  const [searchQuery, setSearchQuery] = useState(() => getWindowParam('search') || '');
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -39,10 +42,16 @@ export function PaymentTrailContent() {
 
   useEffect(() => { load(); }, [load, dataVersion]);
 
+  const buckets = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return q ? result.buckets.filter(b => b.label.toLowerCase().includes(q)) : result.buckets;
+  }, [result.buckets, searchQuery]);
+  const grandTotal = searchQuery.trim() ? buckets.reduce((sum, b) => sum + b.total, 0) : result.grand_total;
+
   // "Show Print Preview" opens a new window landing on this same filtered report (per the user,
   // 2026-09-03), instead of an in-page overlay.
   const handleShowPrintPreview = () => {
-    api.openWindow('reports', 'payment-trail', { fromDate, toDate, autoPreview: '1' });
+    api.openWindow('reports', 'payment-trail', { fromDate, toDate, search: searchQuery, autoPreview: '1' });
   };
 
   // Opened via another window's "Show Print Preview" — go straight into the preview once loaded.
@@ -52,7 +61,7 @@ export function PaymentTrailContent() {
 
   const handleExportExcel = () => {
     const headers = ['Account Title', 'Amount'];
-    const rows: (string | number)[][] = result.buckets.map(b => [b.label, b.total]);
+    const rows: (string | number)[][] = buckets.map(b => [b.label, b.total]);
     exportRowsToExcel('payment-trail', headers, rows);
   };
 
@@ -82,7 +91,7 @@ export function PaymentTrailContent() {
             </tr>
           </thead>
           <tbody>
-            {result.buckets.map(bucket => (
+            {buckets.map(bucket => (
               <tr key={bucket.key}>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', fontWeight: 'bold' }}>{bucket.label}</td>
                 <td style={{ border: '1px solid #000000', padding: '5px 6px', fontSize: '11px', textAlign: 'right', fontWeight: 'bold', fontFamily: 'monospace', color: REPORT_COLORS.out }}>{bucket.total > 0 ? formatCurrency(bucket.total) : '-'}</td>
@@ -90,7 +99,7 @@ export function PaymentTrailContent() {
             ))}
             <tr className="excel-print-total-row excel-print-double-bottom" style={{ fontWeight: 'bold', backgroundColor: '#f2f2f2' }}>
               <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'left' }}>GRAND TOTAL (AMOUNTS PAID)</td>
-              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{formatCurrency(result.grand_total)}</td>
+              <td style={{ border: '1px solid #000000', padding: '6px', fontSize: '11px', textAlign: 'right', fontFamily: 'monospace', textDecoration: 'underline', color: REPORT_COLORS.gold }}>{formatCurrency(grandTotal)}</td>
             </tr>
           </tbody>
         </table>
@@ -124,10 +133,11 @@ export function PaymentTrailContent() {
         {/* Filter Bar - data-no-print */}
         <StickyFilter>
           <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-          <div className="flex items-center gap-3">
+            <ReportSearchBar ref={searchRef} value={searchQuery} onChange={setSearchQuery} placeholder="Search account title..." />
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-500 uppercase">From:</label>
-              <input ref={fromDateRef} type="date"
+              <input type="date"
             value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1.5 text-xs" />
             </div>
             <div className="flex items-center gap-2">

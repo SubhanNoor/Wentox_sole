@@ -4,7 +4,7 @@ const { ipcMain } = require('electron');
 const { BrowserWindow } = require('electron');
 const {
   openChildWindow, setQuickMenuBottom, closeChildAndFocusMain, listChildWindows, focusChildWindow,
-  placeMenuPopup, showMenuPopup, hideMenuPopup,
+  placeMenuPopup, showMenuPopup, hideMenuPopup, setMainModal,
 } = require('../../electron/windowManager');
 const { wrap } = require('./wrap');
 const { requireSession } = require('./session');
@@ -53,6 +53,14 @@ module.exports = function register() {
 
   ipcMain.handle('windows:hideMenuPopup', wrap((_payload, event) => {
     return { hidden: hideMenuPopup(BrowserWindow.fromWebContents(event.sender)) };
+  }));
+
+  // Quick Menu (AppLayout.tsx): the main window is brought in front of the floating children while
+  // its rename/password dialog is open. Window stacking only — no data — so no session check, same
+  // as the menu popup above.
+
+  ipcMain.handle('windows:setMainModal', wrap((payload, event) => {
+    return { accepted: setMainModal(BrowserWindow.fromWebContents(event.sender), payload?.open) };
   }));
 
   // The main window's "Open Windows" list: every open child window, and bringing one forward.

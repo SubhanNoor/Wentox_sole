@@ -36,6 +36,10 @@ function escapeIdentifier(name) {
   return name.replace(/]/g, ']]');
 }
 
+function backupBakFilePath(folder) {
+  return path.join(folder, `${config.backupDbName}.bak`);
+}
+
 function backupDataFilePath(folder) {
   return path.join(folder, `${config.backupDbName}.mdf`);
 }
@@ -78,10 +82,13 @@ async function runSyncNow() {
   // mirror's own .mdf/.ldf. Fixed name rather than a timestamped one: the sync is single-flight,
   // WITH INIT overwrites, and a crash therefore leaves one reused scratch file instead of a
   // growing pile of orphans.
-  const tempBakPath = path.join(folder, `${config.db.database}_sync.bak`);
+  // KEPT after the sync now (per the user, 2026-11-26): the live-backup folder holds three files —
+  // the mirror's .mdf/.ldf plus this .bak, a plain backup file of the latest sync that can be
+  // copied anywhere and restored on its own. Fixed name, overwritten by every sync.
+  const bakPath = backupBakFilePath(folder);
   try {
     await pool.request()
-      .input('bakPath', sql.NVarChar, tempBakPath)
+      .input('bakPath', sql.NVarChar, bakPath)
       .query(`BACKUP DATABASE [${escapeIdentifier(config.db.database)}] TO DISK = @bakPath WITH INIT`);
 
     // The backup set's logical file names are whatever the MAIN database was created with (e.g.
@@ -92,7 +99,7 @@ async function runSyncNow() {
     // out of the backup set so the MOVE clauses are always correct regardless of what the main DB
     // was named/created with.
     const fileList = await pool.request()
-      .input('bakPath', sql.NVarChar, tempBakPath)
+      .input('bakPath', sql.NVarChar, bakPath)
       .query('RESTORE FILELISTONLY FROM DISK = @bakPath');
     const moveClauses = fileList.recordset
       .map((f) => {
@@ -107,7 +114,7 @@ async function runSyncNow() {
     await pool.request().query(`ALTER DATABASE [${escapeIdentifier(config.backupDbName)}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE`);
     try {
       await pool.request()
-        .input('bakPath', sql.NVarChar, tempBakPath)
+        .input('bakPath', sql.NVarChar, bakPath)
         .query(`RESTORE DATABASE [${escapeIdentifier(config.backupDbName)}] FROM DISK = @bakPath WITH REPLACE, ${moveClauses}`);
     } finally {
       // Runs even if RESTORE failed, so a failed sync never leaves the backup DB stuck in
@@ -117,7 +124,8 @@ async function runSyncNow() {
       });
     }
   } finally {
-    fs.unlink(tempBakPath, () => {}); // best-effort cleanup of the scratch .bak; a leftover temp file isn't worth failing the sync over
+    // The old scratch file from before the .bak was kept — removed once, best-effort.
+    fs.unlink(path.join(folder, `${config.db.database}_sync.bak`), () => {});
   }
 }
 

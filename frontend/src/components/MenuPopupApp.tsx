@@ -1,15 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MENU_GROUPS, visibleMenuItems } from '@/lib/menu';
-import { openMenuPopupChannel, type MenuPopupMessage, type PopupMessage, type RenderMessage } from '@/lib/menuPopup';
+import { openMenuPopupChannel, type ContextRenderMessage, type MenuPopupMessage, type PopupMessage, type RenderMessage } from '@/lib/menuPopup';
 import { showMenuPopup } from '@/lib/api';
 import MenuDropdown from './MenuDropdown';
+import QuickMenuContextMenu from './QuickMenuContextMenu';
 
 // The whole page of the MenuBar dropdown's own window (lib/menuPopup.ts). It draws whichever menu
 // the main window asks for, measures it, and only then asks to be shown at that size — so the window
 // never appears empty, at the wrong size, or with the previous menu in it. Hover, clicks and drags
 // are reported back to the main window's MenuBar, which still owns open/close.
 export default function MenuPopupApp() {
-  const [render, setRender] = useState<RenderMessage | null>(null);
+  // Either a MenuBar dropdown or the Quick Menu's right-click menu — whichever was asked for last.
+  const [render, setRender] = useState<RenderMessage | ContextRenderMessage | null>(null);
   const channelRef = useRef<BroadcastChannel | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -26,7 +28,7 @@ export default function MenuPopupApp() {
     channelRef.current = channel;
     if (!channel) return;
     channel.onmessage = (e: MessageEvent<MenuPopupMessage>) => {
-      if (e.data?.type === 'render') setRender(e.data);
+      if (e.data?.type === 'render' || e.data?.type === 'renderContext') setRender(e.data);
     };
     // A menu opened before this window finished loading is re-sent on this.
     channel.postMessage({ type: 'ready' } satisfies PopupMessage);
@@ -44,6 +46,18 @@ export default function MenuPopupApp() {
       void showMenuPopup(seq, rect.width, rect.height);
     });
   }, [render]);
+
+  if (render?.type === 'renderContext') {
+    return (
+      <div ref={boxRef} style={{ width: 'max-content' }}>
+        <QuickMenuContextMenu
+          key={render.seq}
+          title={render.title}
+          onPick={action => post({ type: 'contextPick', action })}
+        />
+      </div>
+    );
+  }
 
   const group = render ? MENU_GROUPS[render.groupIndex] : undefined;
   if (!render || !group) return null;

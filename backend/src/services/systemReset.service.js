@@ -49,6 +49,7 @@ function cleanupBackupFiles() {
   if (folder) {
     safeUnlink(path.join(folder, `${config.backupDbName}.mdf`));
     safeUnlink(path.join(folder, `${config.backupDbName}_log.ldf`));
+    safeUnlink(path.join(folder, `${config.backupDbName}.bak`));
   }
   const externalFolder = getExternalBackupFolder();
   if (externalFolder) {

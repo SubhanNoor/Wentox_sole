@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import AppLayout from '@/components/AppLayout';
 import SearchableSelect from '@/components/SearchableSelect';
-import { Search, Eye } from 'lucide-react';
+import { Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import { formatDate, formatDateTime, getTodayDate, getMonthStartDate } from '@/lib/utils';
 import * as api from '@/lib/api';
@@ -15,6 +15,8 @@ import { REPORT_COLORS } from '@/components/reports/reportColors';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
+import SegmentedControl from '@/components/reports/SegmentedControl';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -362,64 +364,39 @@ export function ReportCashBookContent() {
   return (
       <div className="mx-auto" style={{ maxWidth: 1250 }}>
 
-        {/* Filter Mode Selector - data-no-print */}
-        <div className="flex gap-2 p-1 bg-slate-100 rounded-xl max-w-md mb-6 border border-slate-200" data-no-print>
-          <button
-            onClick={() => setFilterBy('date')}
-            className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${filterBy === 'date' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            By Date
-          </button>
-          <button
-            onClick={() => setFilterBy('month')}
-            className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 ${filterBy === 'month' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            By Month
-          </button>
-          <button
-            onClick={() => setFilterBy('range')}
-            className={`flex-1 text-center py-2 text-sm font-semibold rounded-lg transition-all duration-200 whitespace-nowrap px-2 ${filterBy === 'range' ? 'bg-[#111c2a] text-[#B08D57] shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            Between Two Dates
-          </button>
-        </div>
-
         {/* Selection Bar - data-no-print */}
         <StickyFilter>
           <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-xl border mb-6 bg-white" style={{ borderColor: 'var(--border-color)' }} data-no-print>
-          <div className="flex flex-wrap items-center gap-4 flex-1 min-w-[290px]">
-            <div className="relative flex-1 min-w-[240px]">
-              <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Particulars:</span>
-              <div className="relative">
-                <input
-                  ref={searchRef}
-                  type="text"
-                  placeholder="Search by account, remarks, cheque no..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  className="soleria-input w-full py-2 text-sm pr-10 font-semibold"
-                />
-                <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
-              </div>
+            <ReportSearchBar ref={searchRef} value={searchQuery} onChange={setSearchQuery} placeholder="Search by account, remarks, cheque no..." />
+            {/* Period as a labelled segmented control inside the filter card, like every other report
+                (per the user, 2026-11-26), instead of a separate big tab row above it. */}
+            <div className="basis-full">
+              <SegmentedControl
+                label="Period"
+                options={[{ value: 'date', label: 'By Date' }, { value: 'month', label: 'By Month' }, { value: 'range', label: 'Between Two Dates' }]}
+                value={filterBy}
+                onChange={setFilterBy}
+              />
             </div>
+          <div className="flex flex-wrap items-center gap-4 flex-1 min-w-[290px]">
 
             {filterBy === 'range' ? (
               <div className="flex items-center gap-2">
-                <div>
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">From:</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">From:</span>
                   <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="soleria-input py-1 text-xs" />
                 </div>
-                <div>
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">To:</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">To:</span>
                   <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="soleria-input py-1 text-xs" />
                 </div>
                 {fromDate && toDate && fromDate > toDate && (
-                  <span className="text-xs font-semibold text-rose-600 self-end pb-1.5">From is after To</span>
+                  <span className="text-xs font-semibold text-rose-600">From is after To</span>
                 )}
               </div>
             ) : filterBy === 'date' ? (
-              <div>
-                <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Date:</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Date:</span>
                 <input
                   type="date"
                   value={specificDate}
@@ -429,8 +406,8 @@ export function ReportCashBookContent() {
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <div>
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Month:</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Month:</span>
                   <div className="w-36">
                     <SearchableSelect
                       options={MONTHS.map((m, idx) => ({ value: String(idx), label: m }))}
@@ -440,8 +417,8 @@ export function ReportCashBookContent() {
                     />
                   </div>
                 </div>
-                <div>
-                  <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Year:</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">Year:</span>
                   <div className="w-28">
                     <SearchableSelect
                       options={[
@@ -460,7 +437,7 @@ export function ReportCashBookContent() {
           <div className="flex items-center gap-2">
             <button
               onClick={handleShowPrintPreview}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs self-end h-9"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl text-xs transition-all cursor-pointer shadow-xs"
             >
               <Eye size={14} /> Show Print Preview
             </button>

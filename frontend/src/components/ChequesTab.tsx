@@ -1,8 +1,8 @@
-import { Fragment, useState, useMemo, useEffect, useCallback } from 'react';
+import { Fragment, useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { formatCurrency } from '@/context/AppContext';
 import { todayISO } from '@/lib/cheques';
 import { formatDate, formatDateTime } from '@/lib/utils';
-import { Search, AlertTriangle, Eye } from 'lucide-react';
+import { AlertTriangle, Eye } from 'lucide-react';
 import { exportRowsToExcel } from '@/lib/export';
 import SearchableSelect from '@/components/SearchableSelect';
 import * as api from '@/lib/api';
@@ -14,6 +14,7 @@ import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { getWindowParam, isChildWindow } from '@/lib/windowParams';
 import { useDataVersion } from '@/hooks/useDataVersion';
 import StickyFilter from '@/components/StickyFilter';
+import ReportSearchBar from '@/components/reports/ReportSearchBar';
 
 const STATUS_STYLES: Record<ChequeStatus, string> = {
   PENDING: 'bg-amber-50 text-amber-800 border-amber-200',
@@ -45,6 +46,10 @@ export default function ChequesTab() {
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   const [search, setSearch] = useState(() => getWindowParam('search') || '');
+  // The cursor lands in the search bar on open and on every switch to this tab (it mounts fresh),
+  // per the user, 2026-11-26 — every report opens with its search bar focused.
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { requestAnimationFrame(() => searchRef.current?.focus()); }, []);
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | ChequeStatus>(() => (getWindowParam('statusFilter') as 'all' | 'open' | ChequeStatus) || 'open');
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
@@ -430,20 +435,8 @@ export default function ChequesTab() {
         style={{ borderColor: 'var(--border-color)' }}
         data-no-print
       >
+        <ReportSearchBar ref={searchRef} value={search} onChange={setSearch} placeholder="Cheque no. or customer..." />
         <div className="flex flex-wrap items-center gap-4 flex-1 min-w-[280px]">
-          <div className="relative flex-1 min-w-[220px]">
-            <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Search:</span>
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Cheque no. or customer..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="soleria-input w-full py-2 text-sm pr-10 font-semibold"
-              />
-              <Search className="absolute right-3 top-2.5 text-slate-400" size={16} />
-            </div>
-          </div>
           <div>
             <span className="block text-xs font-semibold text-slate-500 uppercase mb-1">Status:</span>
             <select
