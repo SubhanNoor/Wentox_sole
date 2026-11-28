@@ -172,6 +172,13 @@ export function ReportCashBookContent() {
       // width comes from the column percentages — without it the cell just grows to fit.
       whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 0,
     });
+    // Account names and remarks are the exception (per the user, 2026-11-28): clipped, they hid
+    // exactly the text the book is read for. They wrap onto a second line when they must; every
+    // other cell stays one line, so a row only grows when its name or remark is genuinely long.
+    const wrapTd = (align: 'left' | 'center' | 'right') => ({
+      ...td(align), whiteSpace: 'normal' as const, overflow: 'visible', textOverflow: 'clip',
+      overflowWrap: 'anywhere' as const,
+    });
 
     return (
       <div className="excel-print-container">
@@ -196,23 +203,26 @@ export function ReportCashBookContent() {
               <th style={th('center', '4%')}>S#</th>
               {/* Widths total exactly 100% in both modes. They used to come to 108%, which the
                   browser silently renormalised — meaning the printed column widths were never the
-                  ones written here, and widening Type could not be reasoned about. */}
-              <th style={th('left', showDate ? '16%' : '18%')}>Account Name</th>
-              <th style={th('left', showDate ? '12%' : '14%')}>Remarks</th>
-              {showDate && <th style={th('left', '9%')}>Date</th>}
-              <th style={th('left', '10%')}>Type</th>
-              <th style={th('left', '10%')}>Cheque No</th>
-              <th style={th('right', showDate ? '9.75%' : '11%')}>Receipts<br />Cheq./Online</th>
-              <th style={th('right', showDate ? '9.75%' : '11%')}>Payments<br />Cheq./Online</th>
-              <th style={th('right', showDate ? '9.75%' : '11%')}>Receipts<br />Cash</th>
-              <th style={th('right', showDate ? '9.75%' : '11%')}>Payments<br />Cash</th>
+                  ones written here, and widening Type could not be reasoned about.
+                  Account Name / Remarks widened (per the user, 2026-11-28) out of the amount,
+                  Cheque No and Date columns, which were far wider than their contents on the
+                  landscape page — an 8% amount column still holds "(99,999,999)". */}
+              <th style={th('left', showDate ? '22%' : '25%')}>Account Name</th>
+              <th style={th('left', showDate ? '21.5%' : '23.5%')}>Remarks</th>
+              {showDate && <th style={th('left', '7%')}>Date</th>}
+              <th style={th('left', '7.5%')}>Type</th>
+              <th style={th('left', '8%')}>Cheque No</th>
+              <th style={th('right', showDate ? '7.5%' : '8%')}>Receipts<br />Cheq./Online</th>
+              <th style={th('right', showDate ? '7.5%' : '8%')}>Payments<br />Cheq./Online</th>
+              <th style={th('right', showDate ? '7.5%' : '8%')}>Receipts<br />Cash</th>
+              <th style={th('right', showDate ? '7.5%' : '8%')}>Payments<br />Cash</th>
             </tr>
           </thead>
           <tbody>
             {filteredRows.map((row, idx) => (
               <tr key={idx}>
                 <td style={{ ...td('center'), fontFamily: 'monospace' }}>{row.is_first_of_txn ? row.txn_seq : ''}</td>
-                <td style={{ ...td('left'), fontWeight: 'bold', paddingLeft: row.side === 'TO' ? '18px' : '6px', fontStyle: row.is_posted ? 'normal' : 'italic', color: row.is_posted ? REPORT_COLORS.text : REPORT_COLORS.muted }}>
+                <td style={{ ...wrapTd('left'), fontWeight: 'bold', paddingLeft: row.side === 'TO' ? '18px' : '6px', fontStyle: row.is_posted ? 'normal' : 'italic', color: row.is_posted ? REPORT_COLORS.text : REPORT_COLORS.muted }}>
                   <span style={{ fontSize: '8px', fontWeight: 'bold', color: row.side === 'FROM' ? '#e11d48' : '#047857', marginRight: '5px' }}>
                     {row.side === 'FROM' ? 'FROM' : '\u21b3 TO'}
                   </span>
@@ -223,13 +233,13 @@ export function ReportCashBookContent() {
                     <span style={{ fontSize: '8px', fontWeight: 'bold', marginLeft: '5px', color: '#92400e' }}>(UNPOSTED)</span>
                   )}
                 </td>
-                <td style={{ ...td('left'), color: REPORT_COLORS.muted }}>{row.remarks || '—'}</td>
-                {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(row.date)}</td>}
+                <td style={{ ...wrapTd('left'), color: '#000000' }}>{row.remarks || '—'}</td>
+                {showDate && <td style={{ ...td('left'), fontFamily: 'monospace', color: '#000000' }}>{formatDate(row.date)}</td>}
                 {/* Clipped, not spilling: a long value used to run out of this cell and print on
                     top of Cheque No (reported 2026-09-01). Belt and braces alongside the shorter
                     labels — a future payment mode should not be able to break the layout. */}
                 <td style={{ ...td('left'), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 0, fontWeight: 'bold', color: row.affects_cash ? '#334155' : '#0369a1' }}>{row.mode}</td>
-                <td style={{ ...td('left'), fontFamily: 'monospace', color: REPORT_COLORS.muted }}>{row.cheque_no || '—'}</td>
+                <td style={{ ...td('left'), fontFamily: 'monospace', color: '#000000' }}>{row.cheque_no || '—'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', color: '#047857' }}>{row.receipt_bank > 0 ? formatCurrency(row.receipt_bank) : '-'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', color: '#e11d48' }}>{row.payment_bank > 0 ? formatCurrency(-row.payment_bank) : '-'}</td>
                 <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#047857' }}>{row.receipt_cash > 0 ? formatCurrency(row.receipt_cash) : '-'}</td>
@@ -299,10 +309,10 @@ export function ReportCashBookContent() {
               <tbody>
                 {result.bank_transfers.map((t, idx) => (
                   <tr key={idx}>
-                    {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(t.date)}</td>}
-                    <td style={{ ...td('left'), fontWeight: 'bold' }}>{t.from_name}</td>
-                    <td style={{ ...td('left'), fontWeight: 'bold' }}>{t.to_name}</td>
-                    <td style={{ ...td('left'), color: REPORT_COLORS.muted }}>{t.remarks || '—'}</td>
+                    {showDate && <td style={{ ...td('left'), fontFamily: 'monospace', color: '#000000' }}>{formatDate(t.date)}</td>}
+                    <td style={{ ...wrapTd('left'), fontWeight: 'bold' }}>{t.from_name}</td>
+                    <td style={{ ...wrapTd('left'), fontWeight: 'bold' }}>{t.to_name}</td>
+                    <td style={{ ...wrapTd('left'), color: '#000000' }}>{t.remarks || '—'}</td>
                     <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{formatCurrency(t.amount)}</td>
                   </tr>
                 ))}
@@ -326,10 +336,10 @@ export function ReportCashBookContent() {
               <tbody>
                 {result.cheque_deposits.map((d, idx) => (
                   <tr key={idx}>
-                    {showDate && <td style={{ ...td('left'), fontFamily: 'monospace' }}>{formatDate(d.date)}</td>}
-                    <td style={{ ...td('left'), fontFamily: 'monospace', color: REPORT_COLORS.muted }}>{d.cheque_no || '—'}</td>
-                    <td style={{ ...td('left'), fontWeight: 'bold' }}>{d.payer_name}</td>
-                    <td style={td('left')}>{d.bank_name || '—'}</td>
+                    {showDate && <td style={{ ...td('left'), fontFamily: 'monospace', color: '#000000' }}>{formatDate(d.date)}</td>}
+                    <td style={{ ...td('left'), fontFamily: 'monospace', color: '#000000' }}>{d.cheque_no || '—'}</td>
+                    <td style={{ ...wrapTd('left'), fontWeight: 'bold' }}>{d.payer_name}</td>
+                    <td style={wrapTd('left')}>{d.bank_name || '—'}</td>
                     <td style={{ ...td('right'), fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{formatCurrency(d.amount)}</td>
                   </tr>
                 ))}

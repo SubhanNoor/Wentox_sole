@@ -1793,6 +1793,9 @@ export interface LedgerRow {
   // Only present (an array, possibly empty) when type === 'Purchase' — one row per purchased
   // item, for LED-01's grouped display (changes-14-09-26.md). Undefined for every other row type.
   purchase_items?: LedgerPurchaseItem[];
+  // What the user typed on the voucher (2026-11-28) — already appended to `narration`; kept apart
+  // so a purchase expanded into per-item rows can show it on its first item row.
+  user_narration?: string | null;
   is_payment_row: boolean;
   balance: number;
 }
@@ -2309,6 +2312,8 @@ declare global {
       };
       booksCheck: {
         run: () => Promise<ApiResult<BooksCheckResult>>;
+        clear: (payload: BooksCheckItemRef) => Promise<ApiResult<BooksCheckResult>>;
+        restore: (payload: BooksCheckItemRef) => Promise<ApiResult<BooksCheckResult>>;
       };
       settlements: {
         list: (payload?: SettlementListFilters) => Promise<ApiResult<SettlementRow[]>>;
@@ -3295,13 +3300,31 @@ export const stockVouchers = {
 };
 
 // Books Check (2026-10-25) — read-only checks the books must always pass; ADMIN only.
+/** One flagged record. `key` names its exact records, so a changed item no longer matches a clearance. */
+export interface BooksCheckRow {
+  key: string;
+  text: string;
+}
+/** A flagged record an admin marked as already settled by hand (2026-11-28). */
+export interface BooksCheckClearedRow extends BooksCheckRow {
+  cleared_at: string;
+  cleared_by: string | null;
+}
 export interface BooksCheckItem {
   key: string;
   title: string;
   ok: boolean;
   summary: string;
-  /** The exact records behind a failed check, one line each. */
-  rows: string[];
+  /** Only the per-record checks can be cleared; the two totals checks can't. */
+  clearable: boolean;
+  /** The exact records behind a failed check, one each — not counting cleared ones. */
+  items: BooksCheckRow[];
+  cleared: BooksCheckClearedRow[];
+}
+export interface BooksCheckItemRef {
+  check_key: string;
+  item_key: string;
+  item_text?: string;
 }
 export interface BooksCheckResult {
   ran_at: string;
@@ -3311,6 +3334,10 @@ export interface BooksCheckResult {
 export const booksCheck = {
   run: () =>
     window.api ? window.api.booksCheck.run() : Promise.resolve(NO_BRIDGE),
+  clear: (payload: BooksCheckItemRef) =>
+    window.api ? window.api.booksCheck.clear(payload) : Promise.resolve(NO_BRIDGE),
+  restore: (payload: BooksCheckItemRef) =>
+    window.api ? window.api.booksCheck.restore(payload) : Promise.resolve(NO_BRIDGE),
 };
 
 export const settlements = {

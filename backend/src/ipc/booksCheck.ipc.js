@@ -10,4 +10,15 @@ module.exports = function register() {
     requireRole('ADMIN');
     return service.run();
   }));
+
+  // Mark one flagged item as already settled by hand / undo that (2026-11-28). ADMIN only, like run.
+  ipcMain.handle('books-check:clear', wrap((payload) => {
+    const session = requireRole('ADMIN');
+    return service.clearItem(payload, session.userId);
+  }));
+
+  ipcMain.handle('books-check:restore', wrap((payload) => {
+    requireRole('ADMIN');
+    return service.restoreItem(payload);
+  }));
 };

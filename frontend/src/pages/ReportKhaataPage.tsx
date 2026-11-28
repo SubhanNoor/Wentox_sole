@@ -180,7 +180,8 @@ export function ReportKhaataContent({ scope = 'customer' }: ReportKhaataContentP
             // just narrating one item at a time instead of all of them crammed into one cell.
             date: i === 0 ? formatDate(r.date) : '', type: i === 0 ? r.type : '',
             invNo: i === 0 ? invNo : '', billNo: i === 0 ? (r.bill_no || '-') : '',
-            narration: `${item.material_name} — ${item.quantity} ${item.unit} @ ${formatCurrency(item.price_per_unit)} = ${formatCurrency(item.total_price)}`,
+            // The user's typed narration rides on the first item row (2026-11-28).
+            narration: `${item.material_name} — ${item.quantity} ${item.unit} @ ${formatCurrency(item.price_per_unit)} = ${formatCurrency(item.total_price)}${i === 0 && r.user_narration ? ` — ${r.user_narration}` : ''}`,
             chequeNo: undefined, chequeDate: undefined,
             pairs: 0, debit: 0, credit: 0, balance: r.balance, showBalance: false, isSubRow: true,
           });

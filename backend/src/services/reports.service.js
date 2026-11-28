@@ -256,6 +256,15 @@ function reversalLabel(narration) {
   return null;
 }
 
+// User narration rule (per the user, 2026-11-28): whatever the user typed on a voucher always shows
+// in the ledger, AFTER the system/rule-built text for that voucher type — "<rule text> — <user
+// text>". Nothing typed → the rule text exactly as before.
+function withUserNarration(base, userText) {
+  const typed = userText ? String(userText).trim() : '';
+  if (!typed) return base;
+  return base ? `${base} — ${typed}` : typed;
+}
+
 function formatLedgerRow(r, viewedBaId) {
   let type = r.source_type;
   let inv_no = null;
@@ -264,13 +273,22 @@ function formatLedgerRow(r, viewedBaId) {
   let cheque_no = null;
   let cheque_date = null;
   let cheque_received_date = null;
+  // The user's own typed text for this row's voucher, kept apart too so a purchase expanded into
+  // per-item rows on the frontend can still show it (on the first item row).
+  let user_narration = null;
 
   switch (r.source_type) {
     case 'SALE_BILL':
-      type = 'Sale Bill'; inv_no = r.sb_system_no ?? r.sb_inv_no; bill_no = r.sb_bill_no; narration = narration || 'SAME';
+      // Per the user (2026-11-28): "SAME" = delivered to the main customer itself; otherwise the
+      // sub customer's name only. The bill's own number already sits in the Inv # column.
+      type = 'Sale Bill'; inv_no = r.sb_system_no ?? r.sb_inv_no; bill_no = r.sb_bill_no;
+      user_narration = r.sb_remarks;
+      narration = withUserNarration(r.sb_sub_name || 'SAME', user_narration);
       break;
     case 'SALE_RETURN':
-      type = 'Sale Return'; inv_no = r.sr_system_no ?? r.sr_inv_no; bill_no = r.sr_bill_no; narration = narration || 'SAME';
+      type = 'Sale Return'; inv_no = r.sr_system_no ?? r.sr_inv_no; bill_no = r.sr_bill_no;
+      user_narration = r.sr_remarks;
+      narration = withUserNarration(r.sr_sub_name || 'SAME', user_narration);
       break;
     case 'RECEIPT': {
       type = reversalLabel(r.narration) || 'Receipt (Jamma)'; inv_no = r.rc_voucher_no ?? null;
@@ -284,12 +302,18 @@ function formatLedgerRow(r, viewedBaId) {
           paymentMode: r.rc_payment_mode, onlineBaId: r.rc_online_ba_id, onlineBaName: r.rc_online_ba_name,
           mainName: r.rc_account_name, viewedBaId, mainBaId: r.rc_ba_id, mainFlowsOut: true,
         });
+        // The line's own remarks, else the voucher header's (2026-11-28). A reversal row already
+        // carries its own remarks in its stored text.
+        user_narration = r.rc_remarks || r.rv_remarks;
+        narration = withUserNarration(narration, user_narration);
       }
       if (r.cheque_no) { cheque_no = r.cheque_no; cheque_date = r.cheque_date; cheque_received_date = r.cheque_received_date; }
       break;
     }
     case 'COMMISSION':
-      type = 'Commission'; narration = narration || 'Invoice Discount / Commission';
+      type = 'Commission';
+      user_narration = r.rc_remarks || r.rv_remarks;
+      narration = withUserNarration(narration || 'Invoice Discount / Commission', user_narration);
       break;
     case 'EXPENSE':
       type = 'Expense'; inv_no = r.ex_voucher_no ?? null;
@@ -302,6 +326,8 @@ function formatLedgerRow(r, viewedBaId) {
         paymentMode: r.ex_payment_mode, onlineBaId: r.ex_online_ba_id, onlineBaName: r.ex_online_ba_name,
         mainName: r.ex_ba_name, viewedBaId, mainBaId: r.ex_ba_id, mainFlowsOut: false,
       });
+      user_narration = r.ex_remarks || r.ev_remarks;
+      narration = withUserNarration(narration, user_narration);
       break;
     case 'WAGE_RUN':
       type = 'Wage Run'; narration = 'HISAB';
@@ -310,7 +336,8 @@ function formatLedgerRow(r, viewedBaId) {
       type = 'Salary Run';
       const pm = new Date(r.sar_period_month);
       const month = pm.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
-      narration = `Salary for ${month} ${pm.getUTCFullYear()}`;
+      user_narration = r.sar_item_remarks;
+      narration = withUserNarration(`Salary for ${month} ${pm.getUTCFullYear()}`, user_narration);
       break;
     }
     case 'TRANSFER':
@@ -349,9 +376,13 @@ function formatLedgerRow(r, viewedBaId) {
       // Only a MORE-THAN-ONE-item purchase gets the per-item row treatment, entirely on the
       // frontend from `purchase_items` below; this case intentionally does nothing extra.
       type = 'Purchase'; inv_no = r.pu_system_no ?? null;
+      user_narration = r.pu_remarks;
+      narration = withUserNarration(narration, user_narration);
       break;
     case 'PURCHASE_RETURN':
       type = 'Purchase Return'; inv_no = r.pr_system_no ?? null;
+      user_narration = r.pr_remarks;
+      narration = withUserNarration(narration, user_narration);
       break;
     case 'CHEQUE_ALLOCATION': {
       // Both the original endorsement (cheques.service.js#endorseToVendor/endorseToExpense,
@@ -364,9 +395,16 @@ function formatLedgerRow(r, viewedBaId) {
       type = isReversal ? (reversalLabel(r.narration) || 'Cheque Return') : 'Cheque Endorsement';
       // The stored text names the bank/vendor and an internal cheque id — replaced by the real
       // cheque number and due date (2026-09-18). A reversal keeps its own explanatory text.
-      if (!isReversal) narration = paymentNarration('Cheque', r.cal_cheque_no, r.cal_cheque_date);
+      if (!isReversal) {
+        user_narration = r.cal_remarks;
+        narration = withUserNarration(paymentNarration('Cheque', r.cal_cheque_no, r.cal_cheque_date), user_narration);
+      }
       break;
     }
+    case 'DEPOSIT':
+      user_narration = r.dp_remarks;
+      narration = withUserNarration(narration, user_narration);
+      break;
     case 'OPENING':
       type = 'Opening Balance';
       break;
@@ -419,6 +457,7 @@ function formatLedgerRow(r, viewedBaId) {
     debit: Number(r.debit),
     credit: Number(r.credit),
     purchase_items,
+    user_narration: user_narration ? String(user_narration).trim() || null : null,
     is_payment_row: r.source_type === 'RECEIPT' || r.source_type === 'COMMISSION',
   };
 }
@@ -876,6 +915,16 @@ async function cashBook(filters = {}) {
     });
   }
 
+  // Remarks column = the ledgers' own narration (per the user, 2026-11-28: "make cashbook narration
+  // like of ledgers") — rule text plus whatever the user typed, built by the same formatLedgerRow(),
+  // viewed from that line's own account so an online payment reads to/from the right party.
+  const narrationByEntry = new Map();
+  const entryIds = ordered.map((r) => Number(r.entry_id));
+  if (entryIds.length) {
+    const full = await repository.ledgerRows({ entry_ids: entryIds });
+    for (const fr of full) narrationByEntry.set(Number(fr.entry_id), formatLedgerRow(fr, fr.ba_id).narration);
+  }
+
   let rows = ordered.map((r) => {
     const isFirstOfTxn = r.__isFirst;
     const debit = Number(r.debit);
@@ -895,7 +944,7 @@ async function cashBook(filters = {}) {
       // forced to the side matching its direction, so a cash payment reads TO (money out) even
       // though the payee sits on the debit side of the ledger.
       side: r.__forceSide || (isDebit ? 'TO' : 'FROM'),
-      remarks: r.narration || '',
+      remarks: narrationByEntry.get(Number(r.entry_id)) ?? r.narration ?? '',
       mode: cashBookSideMode(r),
       // Was hardcoded null when this mapping was rewritten, which silently dropped every cheque
       // number from the report — the column was there and always empty (reported 2026-09-01).

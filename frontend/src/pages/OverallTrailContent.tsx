@@ -205,7 +205,8 @@ export default function OverallTrailContent({ initialGroup = 'all' }: OverallTra
           out.push({
             key: `${row.entry_id}-i${i}`,
             date: i === 0 ? formatDate(row.date) : '', type: i === 0 ? row.type : '', ref: i === 0 ? ref : '',
-            narration: `${item.material_name} — ${item.quantity} ${item.unit} @ ${formatCurrency(item.price_per_unit)} = ${formatCurrency(item.total_price)}`,
+            // The user's typed narration rides on the first item row (2026-11-28).
+            narration: `${item.material_name} — ${item.quantity} ${item.unit} @ ${formatCurrency(item.price_per_unit)} = ${formatCurrency(item.total_price)}${i === 0 && row.user_narration ? ` — ${row.user_narration}` : ''}`,
             debit: 0, credit: 0, balance: row.balance, showBalance: false, isSubRow: true,
           });
         });

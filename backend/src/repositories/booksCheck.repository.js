@@ -1,5 +1,6 @@
 // Repository layer: SQL only — the read-only queries behind the Books Check (booksCheck.service.js).
-// Every query here is a SELECT; nothing in this file writes.
+// The checks themselves are all SELECTs and never touch the books. The only writes are to
+// books_check_clearances (migration 050) — an admin marking a flagged item as already settled.
 const { sql, query } = require('../db/pool');
 
 async function trialBalance() {
@@ -33,7 +34,10 @@ async function chequesInHand(chequesBaId) {
 // is one credit, not two. If the bounced record is ever re-used it leaves BOUNCED and counts again.
 async function duplicateCheques() {
   const result = await query(
-    `SELECT LTRIM(RTRIM(ch.cheque_no)) AS cheque_no, ba.name AS party, COUNT(*) AS records,
+    `SELECT LTRIM(RTRIM(ch.cheque_no)) AS cheque_no, r.ba_id, ba.name AS party, COUNT(*) AS records,
+            -- The exact receipts, for the clearance key: a further receipt with this cheque
+            -- number is a new problem, not the one that was cleared.
+            STRING_AGG(CAST(r.receipt_id AS VARCHAR(12)), ',') WITHIN GROUP (ORDER BY r.receipt_id) AS receipt_ids,
             STRING_AGG(CONCAT('receipt #', r.receipt_id, ' (', LOWER(ch.cheque_status), ', ', CAST(r.amount AS DECIMAL(14, 0)), ')'), '; ')
               WITHIN GROUP (ORDER BY r.receipt_id) AS detail
      FROM dbo.cheques ch
@@ -105,4 +109,41 @@ async function doublePostings() {
   return result.recordset;
 }
 
-module.exports = { trialBalance, chequesInHand, duplicateCheques, overAllocatedCheques, doublePostings };
+async function listClearances() {
+  const result = await query(
+    `SELECT c.check_key, c.item_key, c.item_text, c.cleared_at, u.username AS cleared_by_name
+     FROM dbo.books_check_clearances c
+     LEFT JOIN dbo.users u ON u.user_id = c.cleared_by
+     ORDER BY c.cleared_at`,
+  );
+  return result.recordset;
+}
+
+async function addClearance({ check_key, item_key, item_text, cleared_by }) {
+  await query(
+    `IF NOT EXISTS (SELECT 1 FROM dbo.books_check_clearances WHERE check_key = @checkKey AND item_key = @itemKey)
+       INSERT INTO dbo.books_check_clearances (check_key, item_key, item_text, cleared_by)
+       VALUES (@checkKey, @itemKey, @itemText, @clearedBy)`,
+    {
+      checkKey: { type: sql.VarChar(40), value: check_key },
+      itemKey: { type: sql.NVarChar(400), value: item_key },
+      itemText: { type: sql.NVarChar(1000), value: item_text ?? null },
+      clearedBy: { type: sql.Int, value: cleared_by ?? null },
+    },
+  );
+}
+
+async function removeClearance({ check_key, item_key }) {
+  await query(
+    'DELETE FROM dbo.books_check_clearances WHERE check_key = @checkKey AND item_key = @itemKey',
+    {
+      checkKey: { type: sql.VarChar(40), value: check_key },
+      itemKey: { type: sql.NVarChar(400), value: item_key },
+    },
+  );
+}
+
+module.exports = {
+  trialBalance, chequesInHand, duplicateCheques, overAllocatedCheques, doublePostings,
+  listClearances, addClearance, removeClearance,
+};

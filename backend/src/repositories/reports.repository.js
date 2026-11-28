@@ -189,8 +189,8 @@ async function vendorStock(filters = {}) {
 // rest stay NULL — so a single pass over ledger_entries gets every report's narration/reference
 // columns without N+1 lookups.
 async function ledgerRows(filters = {}) {
-  if (!filters.ba_id && !filters.ac_id) {
-    throw new Error('ledgerRows requires ba_id or ac_id');
+  if (!filters.ba_id && !filters.ac_id && !filters.entry_ids) {
+    throw new Error('ledgerRows requires ba_id, ac_id or entry_ids');
   }
   const conditions = [];
   const params = {};
@@ -200,7 +200,12 @@ async function ledgerRows(filters = {}) {
   // posts via the Cash business account's ba_id, same as every other transfer party) — an OR, not
   // CK_ledger_entries_one's usual "exactly one," which is a per-row constraint and unaffected by
   // this query matching rows from either dimension. Every other caller still passes exactly one.
-  if (filters.ba_id && filters.ac_id) {
+  // entry_ids: exact ledger lines, for the Cash Book (2026-11-28) — it builds each line's narration
+  // with the same formatLedgerRow() the ledgers use, so the two always read the same.
+  if (filters.entry_ids) {
+    conditions.push('le.entry_id IN (SELECT CAST(value AS INT) FROM OPENJSON(@entryIds))');
+    params.entryIds = { type: sql.NVarChar(sql.MAX), value: JSON.stringify(filters.entry_ids) };
+  } else if (filters.ba_id && filters.ac_id) {
     conditions.push('(le.ba_id = @baId OR le.ac_id = @acId)');
     params.baId = { type: sql.Int, value: filters.ba_id };
     params.acId = { type: sql.Int, value: filters.ac_id };
@@ -237,6 +242,23 @@ async function ledgerRows(filters = {}) {
        pr.system_no AS pr_system_no, jv.voucher_no AS jv_voucher_no,
        rv.voucher_no AS rc_voucher_no, ev.voucher_no AS ex_voucher_no,
        sr.return_id AS sr_inv_no, sr.bill_no AS sr_bill_no,
+       -- User narration on every voucher (per the user, 2026-11-28): whatever was typed on the
+       -- voucher always shows in the ledger, after the system/rule text. Sale bills/returns also
+       -- name the sub customer they went to ("SAME" = delivered to the main customer itself).
+       sb.remarks AS sb_remarks, sb_sub.name AS sb_sub_name,
+       sr.remarks AS sr_remarks, sr_sub.name AS sr_sub_name,
+       pu.remarks AS pu_remarks, pr.remarks AS pr_remarks,
+       rv.remarks AS rv_remarks, ev.remarks AS ev_remarks,
+       cal.remarks AS cal_remarks, dp.remarks AS dp_remarks,
+       -- Salary: each employee's own line remarks, matched to the employee's credit line by ba_id
+       -- (the SALARIES EXPENSE debit line has ac_id, so it matches nothing and stays plain).
+       (
+         SELECT TOP 1 sri.remarks
+         FROM dbo.salary_run_items sri
+         JOIN dbo.employees sri_emp ON sri_emp.employee_id = sri.employee_id
+         WHERE le.source_type = 'SALARY_RUN' AND sri.salary_run_id = le.source_id
+           AND sri_emp.ba_id = le.ba_id
+       ) AS sar_item_remarks,
        rc.receipt_id AS rc_id, rc.payment_mode AS rc_payment_mode, rc.remarks AS rc_remarks,
        rc.details AS rc_details, rc.ba_id AS rc_ba_id, rc_ba.name AS rc_account_name,
        -- ONLINE receipt/expense narration (2026-09-21): migration 028/029 let payment_mode=ONLINE
@@ -295,6 +317,9 @@ async function ledgerRows(filters = {}) {
      FROM dbo.ledger_entries le
      LEFT JOIN dbo.sale_bills sb    ON le.source_type = 'SALE_BILL'    AND sb.bill_id = le.source_id
      LEFT JOIN dbo.sale_returns sr  ON le.source_type = 'SALE_RETURN'  AND sr.return_id = le.source_id
+     LEFT JOIN dbo.sub_customers sb_sub ON sb_sub.sub_customer_id = sb.sub_customer_id
+     LEFT JOIN dbo.sub_customers sr_sub ON sr_sub.sub_customer_id = sr.sub_customer_id
+     LEFT JOIN dbo.deposits dp      ON le.source_type = 'DEPOSIT'      AND dp.deposit_id = le.source_id
      LEFT JOIN dbo.receipts rc      ON le.source_type IN ('RECEIPT','COMMISSION') AND rc.receipt_id = le.source_id
      LEFT JOIN dbo.business_accounts rc_ba ON rc_ba.ba_id = rc.ba_id
      LEFT JOIN dbo.business_accounts rc_online_ba ON rc_online_ba.ba_id = rc.online_ba_id
